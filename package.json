@@ -1,6 +1,6 @@
 {
   "name": "pi-fusion",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Multi-model deliberation for pi, inspired by OpenRouter Fusion",
   "type": "module",
   "keywords": ["pi-package", "pi-extension", "fusion", "multi-model"],
@@ -9,7 +9,7 @@
     "clean": "rm -rf node_modules",
     "build": "echo 'pi-fusion is loaded directly by pi via jiti; no build step required'",
     "check": "tsc --noEmit",
-    "test": "node --import jiti/register src/__tests__/utils.test.ts src/__tests__/config.test.ts src/__tests__/models.test.ts src/__tests__/format.test.ts src/__tests__/llm.test.ts"
+    "test": "node --import jiti/register src/__tests__/utils.test.ts src/__tests__/config.test.ts src/__tests__/models.test.ts src/__tests__/format.test.ts src/__tests__/llm.test.ts src/__tests__/context.test.ts"
   },
   "pi": {
     "extensions": [

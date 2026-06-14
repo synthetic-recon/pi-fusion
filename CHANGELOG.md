@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- Added optional recent conversation context for fusion tool calls.
+- New tool parameters: `context_mode: "none" | "recent"` and `context_turns` (1–10, default 4).
+- Panel models receive the context-expanded task when requested.
+- Judge receives the same context-expanded task the panel saw, plus panel responses.
+- Tool guidance now tells the active model to request recent context only when prior turns matter.
+- Added context helper tests.
+
 ## 0.3.2
 
 - Clarified Fusion mode semantics: ON means forced for every normal prompt; OFF means the tool remains available for model-decided use.

@@ -21,6 +21,7 @@ import {
 	MAX_PANEL_MODELS_HARD_LIMIT,
 	validateConfig,
 } from "./config.ts";
+import { buildRecentContextFromEntries, type FusionContextMode, normalizeContextTurns } from "./context.ts";
 import { resolveFusionModels, runFusion } from "./fusion.ts";
 import { listAuthedModels, modelDisplay } from "./models.ts";
 import { selectFusionSetup, showConfigSummary, type FusionSetupState } from "./ui.ts";
@@ -65,6 +66,24 @@ const FusionParams = Type.Object(
 				minimum: 0,
 				maximum: 2,
 				default: DEFAULT_TEMPERATURE,
+			}),
+		),
+		context_mode: Type.Optional(
+			Type.Union([
+				Type.Literal("none"),
+				Type.Literal("recent"),
+			], {
+				description:
+					"Whether to include conversation context for panel and judge calls. Use 'recent' when prior turns are needed; default is 'none'.",
+				default: "none",
+			}),
+		),
+		context_turns: Type.Optional(
+			Type.Integer({
+				description: "Number of recent user turns to include when context_mode is 'recent' (1–10). Default 4.",
+				minimum: 1,
+				maximum: 10,
+				default: 4,
 			}),
 		),
 	},
@@ -242,6 +261,7 @@ function forceFusionPrompt(prompt: string): string {
 		"Use the fusion tool for the following prompt before answering.",
 		"After the fusion tool returns, write the final answer yourself in your normal assistant voice.",
 		"Do not simply paste the fusion JSON or raw panel responses unless the user explicitly asks for diagnostics.",
+		"If prior conversation context is needed, call fusion with context_mode='recent' and a focused context_turns value.",
 		"",
 		prompt,
 	].join("\n");
@@ -299,17 +319,23 @@ export default function (pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use the fusion tool only when a task genuinely benefits from multiple perspectives: research, expert critique, multi-domain analysis, compare/contrast decisions, architecture trade-offs, or anything where being wrong is expensive.",
 			"Do not use the fusion tool for simple tactical prompts, straightforward edits, routine file operations, or questions a single model can answer well.",
-			"When conversation context matters, include the relevant context in the fusion prompt; panel and judge calls do not automatically see the full conversation thread.",
+			"Panel and judge calls do not automatically see the full conversation thread. If prior context matters, either include the relevant details in the prompt argument or set context_mode to 'recent' with an appropriate context_turns value.",
+			"Use context_mode='recent' only when needed; keep context_turns small and focused because each panel model receives that context.",
 			"The fusion tool accepts a prompt and optional model overrides; it does not need file paths unless the prompt itself references them.",
 		],
 		parameters: FusionParams,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const sessionOptions = sessionFusionOptions(ctx);
+			const contextMode = (params.context_mode ?? "none") as FusionContextMode;
+			const contextText = contextMode === "recent"
+				? buildRecentContextFromEntries(ctx.sessionManager.getBranch(), normalizeContextTurns(params.context_turns))
+				: undefined;
 			const options: FusionOptions = {
 				analysis_models: params.analysis_models ?? sessionOptions.analysis_models,
 				model: params.model ?? params.judge_model ?? sessionOptions.model,
 				max_completion_tokens: params.max_completion_tokens,
 				temperature: params.temperature,
+				context_text: contextText,
 			};
 			return runFusion(
 				ctx.cwd,

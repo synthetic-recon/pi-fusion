@@ -45,6 +45,8 @@ export interface FusionOptions {
 	judge_model?: string;
 	max_completion_tokens?: number;
 	temperature?: number;
+	/** Internal/context-expanded text built by the extension from session history. */
+	context_text?: string;
 }
 
 export interface FusionResult {

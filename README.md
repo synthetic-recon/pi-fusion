@@ -152,13 +152,27 @@ Force Fusion once without changing the toggle:
 /fusion <prompt>
 ```
 
-### Overrides
+### Overrides and context
 
 Override the configured panel or judge per-call:
 
 ```
 Please use the fusion tool with analysis_models ["anthropic/claude-sonnet-4-5", "openai/gpt-4.1"] and model "anthropic/claude-opus-4-5" to analyze whether we should migrate to Next.js App Router.
 ```
+
+Panel and judge calls do not automatically see the whole pi conversation thread. The active model keeps the thread and decides what to send to fusion.
+
+When prior conversation context matters, the model can either include the relevant context directly in `prompt` or ask fusion to include recent turns:
+
+```json
+{
+  "prompt": "Evaluate the architecture decision we just discussed.",
+  "context_mode": "recent",
+  "context_turns": 6
+}
+```
+
+`context_mode` defaults to `"none"`. `context_turns` is clamped to 1–10 and defaults to 4. The judge receives the same context-expanded task text the panel saw, plus the panel responses.
 
 ## How models are resolved
 

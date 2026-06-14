@@ -12,6 +12,7 @@ import {
 	loadConfig,
 	PANEL_CONCURRENCY,
 } from "./config.ts";
+import { buildFusionTaskText } from "./context.ts";
 import { callModelText, getTextContent } from "./llm.ts";
 import { modelDisplay, resolvePanelAndJudge, type ResolveResult } from "./models.ts";
 import { JUDGE_SYSTEM_PROMPT, PANEL_SYSTEM_PROMPT, truncateForJudge } from "./prompts.ts";
@@ -53,6 +54,7 @@ export async function runFusion(
 	const maxPanelOutputTokens = config.maxPanelOutputTokens ?? DEFAULT_MAX_PANEL_OUTPUT_TOKENS;
 	const maxCompletionTokens = config.maxCompletionTokens ?? DEFAULT_MAX_COMPLETION_TOKENS;
 	const temperature = config.temperature ?? DEFAULT_TEMPERATURE;
+	const taskText = buildFusionTaskText(prompt, overrides.context_text);
 
 	const { panel, judge, warnings } = await resolvePanelAndJudge(registry, {
 		sessionPanel: overrides.analysis_models,
@@ -84,7 +86,7 @@ export async function runFusion(
 				registry,
 				model,
 				PANEL_SYSTEM_PROMPT,
-				prompt,
+				taskText,
 				maxPanelOutputTokens,
 				temperature,
 				signal,
@@ -134,7 +136,7 @@ export async function runFusion(
 			Math.floor(judge.contextWindow / Math.max(successful.length * 2, 8)),
 		);
 		const judgeUserText =
-			`Task:\n${prompt}\n\n` +
+			`Task:\n${taskText}\n\n` +
 			successful
 				.map(
 					(r) =>
