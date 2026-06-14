@@ -22,7 +22,8 @@ import {
 } from "./config.ts";
 import { resolveFusionModels, runFusion } from "./fusion.ts";
 import { listAuthedModels, modelDisplay } from "./models.ts";
-import { renderConfigStatus, selectFusionSetup, showConfigSummary, type FusionSetupState } from "./ui.ts";
+import { selectFusionSetup, showConfigSummary, type FusionSetupState } from "./ui.ts";
+import { formatResult } from "./format.ts";
 import type { FusionOptions } from "./types.ts";
 const FusionParams = Type.Object(
 	{
@@ -39,10 +40,16 @@ const FusionParams = Type.Object(
 				{ minItems: 1, maxItems: MAX_PANEL_MODELS_HARD_LIMIT },
 			),
 		),
+		model: Type.Optional(
+			Type.String({
+				description:
+					"Optional judge model identifier in provider/id form. OpenRouter-compatible parameter name.",
+			}),
+		),
 		judge_model: Type.Optional(
 			Type.String({
 				description:
-					"Optional judge model identifier in provider/id form. Overrides fusion.json for this call.",
+					"Optional judge model identifier in provider/id form. Backward-compatible alias for model.",
 			}),
 		),
 		max_completion_tokens: Type.Optional(
@@ -102,6 +109,25 @@ function restoreSessionState(ctx: ExtensionContext): FusionSetupState | undefine
 	return undefined;
 }
 
+function sessionFusionOptions(ctx: ExtensionContext): FusionOptions {
+	const sessionState = restoreSessionState(ctx);
+	if (!sessionState?.selectedIds.size) return {};
+	return {
+		analysis_models: Array.from(sessionState.selectedIds),
+		model: sessionState.judgeId ?? Array.from(sessionState.selectedIds)[0],
+	};
+}
+
+function forceFusionPrompt(prompt: string): string {
+	return [
+		"Use the fusion tool for the following prompt before answering.",
+		"After the fusion tool returns, write the final answer yourself in your normal assistant voice.",
+		"Do not simply paste the fusion JSON or raw panel responses unless the user explicitly asks for diagnostics.",
+		"",
+		prompt,
+	].join("\n");
+}
+
 function buildInitialState(
 	ctx: ExtensionContext,
 	resolvedPanel: ModelWithDisplay[],
@@ -156,9 +182,10 @@ export default function (pi: ExtensionAPI) {
 		],
 		parameters: FusionParams,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const sessionOptions = sessionFusionOptions(ctx);
 			const options: FusionOptions = {
-				analysis_models: params.analysis_models,
-				judge_model: params.judge_model,
+				analysis_models: params.analysis_models ?? sessionOptions.analysis_models,
+				model: params.model ?? params.judge_model ?? sessionOptions.model,
 				max_completion_tokens: params.max_completion_tokens,
 				temperature: params.temperature,
 			};
@@ -176,35 +203,13 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("fusion", {
-		description: "Run multi-model fusion on a prompt",
+		description: "Force the active model to use fusion, then answer normally",
 		handler: async (args, ctx) => {
 			const prompt = args.trim();
-
-			if (ctx.mode === "print") {
-				if (!prompt) {
-					console.log("Usage: /fusion <prompt>");
-					return;
-				}
-				const result = await runFusion(
-					ctx.cwd,
-					ctx.modelRegistry,
-					ctx.model,
-					prompt,
-					ctx.isProjectTrusted(),
-					{},
-					ctx.signal,
-				);
-				console.log(result.content[0].text);
-				return;
-			}
-
-			if (ctx.mode === "json" || ctx.mode === "rpc") {
-				ctx.ui.notify("Fusion command is only available in interactive and print modes", "error");
-				return;
-			}
-
 			if (!prompt) {
-				ctx.ui.notify("Usage: /fusion <prompt>", "warning");
+				const usage = "Usage: /fusion <prompt>";
+				if (ctx.mode === "print") console.log(usage);
+				else ctx.ui.notify(usage, "warning");
 				return;
 			}
 
@@ -213,16 +218,33 @@ export default function (pi: ExtensionAPI) {
 				updateStatus(ctx, sessionState.selectedIds, sessionState.judgeId);
 			}
 
-			const overrides: FusionOptions = sessionState?.selectedIds.size
-				? {
-						analysis_models: Array.from(sessionState.selectedIds),
-						judge_model: sessionState.judgeId ?? Array.from(sessionState.selectedIds)[0],
-				  }
-				: {};
+			if (ctx.mode === "print") {
+				console.log(forceFusionPrompt(prompt));
+				return;
+			}
 
-			ctx.ui.setWorkingMessage("Running fusion panel...");
+			pi.sendUserMessage(forceFusionPrompt(prompt));
+		},
+	});
+
+	pi.registerCommand("fusion-report", {
+		description: "Run fusion directly and write the raw panel/judge diagnostic report into the editor",
+		handler: async (args, ctx) => {
+			const prompt = args.trim();
+			if (!prompt) {
+				const usage = "Usage: /fusion-report <prompt>";
+				if (ctx.mode === "print") console.log(usage);
+				else ctx.ui.notify(usage, "warning");
+				return;
+			}
+
+			const sessionState = restoreSessionState(ctx);
+			if (sessionState?.selectedIds.size) updateStatus(ctx, sessionState.selectedIds, sessionState.judgeId);
+			const overrides = sessionFusionOptions(ctx);
+
+			ctx.ui.setWorkingMessage("Running fusion report...");
 			try {
-				const fusionResult = await runFusion(
+				const result = await runFusion(
 					ctx.cwd,
 					ctx.modelRegistry,
 					ctx.model,
@@ -231,11 +253,29 @@ export default function (pi: ExtensionAPI) {
 					overrides,
 					ctx.signal,
 				);
-				ctx.ui.setEditorText(fusionResult.content[0].text);
-				ctx.ui.notify("Fusion complete. Result prefilled in editor.", "info");
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				ctx.ui.notify(`Fusion failed: ${message}`, "error");
+				const failed = (result.details.failed_models ?? []).map((f) => ({
+					model: f.model,
+					provider: f.model.split("/")[0] ?? "",
+					id: f.model.split("/").slice(1).join("/"),
+					content: "",
+					error: f.error,
+				}));
+				const responses = result.details.responses.map((r) => ({
+					model: r.model,
+					provider: r.model.split("/")[0] ?? "",
+					id: r.model.split("/").slice(1).join("/"),
+					content: r.content,
+				}));
+				const report = formatResult(result.details.analysis, responses, failed, {
+					...result.details,
+					panel_models: result.details.panel_models ?? [],
+					judge_model: result.details.judge_model ?? "unknown",
+				});
+				if (ctx.mode === "print") console.log(report);
+				else {
+					ctx.ui.setEditorText(report);
+					ctx.ui.notify("Fusion diagnostic report prefilled in editor.", "info");
+				}
 			} finally {
 				ctx.ui.setWorkingMessage();
 			}
@@ -431,22 +471,6 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify("Fusion panel cleared", "info");
 		},
 	});
-
-	function updateStatus(
-		ctx: ExtensionContext,
-		selectedIds: Set<string>,
-		judgeId: string | undefined,
-	) {
-		const panel = Array.from(selectedIds);
-		if (panel.length === 0) {
-			ctx.ui.setStatus("fusion", undefined);
-			ctx.ui.setWidget("fusion-panel", undefined);
-			return;
-		}
-		const judge = judgeId && selectedIds.has(judgeId) ? judgeId : panel[0];
-		ctx.ui.setStatus("fusion", `${panel.length} panel, judge: ${judge}`);
-		ctx.ui.setWidget("fusion-panel", [`Panel: ${panel.join(", ")}`, `Judge: ${judge}`]);
-	}
 
 	pi.on("session_start", async (_event, ctx) => {
 		const state = restoreSessionState(ctx);

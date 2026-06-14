@@ -53,7 +53,7 @@ export function formatResult(
 ): string {
 	const lines: string[] = [];
 	lines.push(`# Fusion Analysis (${responses.length} panel model${responses.length === 1 ? "" : "s"})`);
-	lines.push(`*Panel: ${details.panel_models.join(", ")} | Judge: ${details.judge_model}*`);
+	lines.push(`*Panel: ${(details.panel_models ?? []).join(", ")} | Judge: ${details.judge_model ?? "unknown"}*`);
 
 	if (failed.length > 0) {
 		lines.push(

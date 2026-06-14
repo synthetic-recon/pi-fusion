@@ -12,7 +12,6 @@ import {
 	loadConfig,
 	PANEL_CONCURRENCY,
 } from "./config.ts";
-import { formatResult } from "./format.ts";
 import { callModelText, getTextContent } from "./llm.ts";
 import { modelDisplay, resolvePanelAndJudge, type ResolveResult } from "./models.ts";
 import { JUDGE_SYSTEM_PROMPT, PANEL_SYSTEM_PROMPT, truncateForJudge } from "./prompts.ts";
@@ -30,7 +29,7 @@ export async function resolveFusionModels(
 	const config = applyDefaults(baseConfig, overrides);
 	return resolvePanelAndJudge(registry, {
 		sessionPanel: overrides.analysis_models,
-		sessionJudge: overrides.judge_model,
+		sessionJudge: overrides.model ?? overrides.judge_model,
 		configPanel: config.panel,
 		configJudge: config.judge,
 		configMaxPanelModels: config.maxPanelModels,
@@ -57,7 +56,7 @@ export async function runFusion(
 
 	const { panel, judge, warnings } = await resolvePanelAndJudge(registry, {
 		sessionPanel: overrides.analysis_models,
-		sessionJudge: overrides.judge_model,
+		sessionJudge: overrides.model ?? overrides.judge_model,
 		configPanel: config.panel,
 		configJudge: config.judge,
 		configMaxPanelModels: config.maxPanelModels,
@@ -102,7 +101,16 @@ export async function runFusion(
 	const failed = rawPanelResults.filter((r): r is PanelResult & { error: string } => !!r.error);
 
 	if (successful.length === 0) {
-		throw new Error(`All panel models failed:\n${failed.map((f) => `- ${f.model}: ${f.error}`).join("\n")}`);
+		const details: FusionDetails = {
+			status: "error",
+			responses: [],
+			failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error" })),
+			panel_models: panelModelNames,
+			judge_model: judgeName,
+			error: "all panel models failed",
+			failure_reason: classifyAllPanelFailure(failed),
+		};
+		return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details };
 	}
 
 	onUpdate?.({
@@ -152,19 +160,28 @@ export async function runFusion(
 		}
 	}
 
-	const status: FusionDetails["status"] =
-		successful.length < 2 ? "degraded" : analysis ? "ok" : "degraded";
-
 	const details: FusionDetails = {
-		status,
+		status: "ok",
 		analysis,
 		responses: successful.map((r) => ({ model: r.model, content: r.content })),
-		failed_models: failed.map((f) => ({ model: f.model, error: f.error })),
+		...(failed.length > 0
+			? { failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error" })) }
+			: {}),
 		panel_models: panelModelNames,
 		judge_model: judgeName,
 	};
 
-	const text = formatResult(analysis, successful, failed, details);
-	return { content: [{ type: "text", text }], details };
+	return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details };
+}
+
+function classifyAllPanelFailure(failed: PanelResult[]): FusionDetails["failure_reason"] {
+	const messages = failed.map((f) => (f.error ?? "").toLowerCase());
+	if (messages.some((m) => m.includes("credit") || m.includes("quota") || m.includes("billing"))) {
+		return "insufficient_credits";
+	}
+	if (messages.some((m) => m.includes("rate limit") || m.includes("429"))) {
+		return "rate_limited";
+	}
+	return "all_panels_failed";
 }
 

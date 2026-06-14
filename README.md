@@ -55,7 +55,7 @@ Quick-start with the interactive selector or template generator:
 /fusion-init      # creates .pi/fusion.json template
 /fusion-config    # show active config
 /fusion-setup     # choose panel and judge via UI
-/fusion-run       # choose setup + prompt, then run
+/fusion-run       # choose setup + prompt, then ask the active model to use fusion
 ```
 
 Example `fusion.json`:
@@ -103,8 +103,9 @@ answers from multiple perspectives.
 
 ### Slash commands
 
-- `/fusion <prompt>` — run fusion with the current setup.
-- `/fusion-run` — open the setup UI, then enter a prompt, then run fusion in one flow.
+- `/fusion <prompt>` — force the active pi model to call the `fusion` tool, then answer normally.
+- `/fusion-report <prompt>` — run fusion directly and write the raw diagnostic panel/judge report into the editor.
+- `/fusion-run` — open the setup UI, then enter a prompt, then ask the active model to use fusion in one flow.
 - `/fusion-setup` — open the model setup UI to choose panel and judge.
   - **Type** to search/filter models.
   - **Tab** switches focus between search box and list.
@@ -127,14 +128,15 @@ answers from multiple perspectives.
   → pick panel models and judge
   → press Enter
   → type prompt in editor
-  → fusion executes automatically
+  → active pi model calls fusion tool
+  → active pi model writes the final answer
 ```
 
 Or configure once and run later:
 
 ```
 /fusion-setup    # choose models
-/fusion <prompt> # run with those models
+/fusion <prompt> # active model uses fusion with those models
 ```
 
 ### Overrides
@@ -142,7 +144,7 @@ Or configure once and run later:
 Override the configured panel or judge per-call:
 
 ```
-Please use the fusion tool with analysis_models ["anthropic/claude-sonnet-4-5", "openai/gpt-4.1"] and judge_model "anthropic/claude-opus-4-5" to analyze whether we should migrate to Next.js App Router.
+Please use the fusion tool with analysis_models ["anthropic/claude-sonnet-4-5", "openai/gpt-4.1"] and model "anthropic/claude-opus-4-5" to analyze whether we should migrate to Next.js App Router.
 ```
 
 ## How models are resolved

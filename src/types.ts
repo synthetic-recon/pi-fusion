@@ -39,6 +39,9 @@ export interface FusionAnalysis {
 
 export interface FusionOptions {
 	analysis_models?: string[];
+	/** OpenRouter-compatible judge parameter name. */
+	model?: string;
+	/** Backward-compatible alias for model. */
 	judge_model?: string;
 	max_completion_tokens?: number;
 	temperature?: number;
@@ -50,12 +53,15 @@ export interface FusionResult {
 }
 
 export interface FusionDetails {
-	status: "ok" | "degraded" | "error";
+	/** OpenRouter-style status: ok if any useful panel response exists; error only for hard failure. */
+	status: "ok" | "error";
 	analysis?: FusionAnalysis;
 	responses: Array<{ model: string; content: string }>;
-	failed_models: Array<{ model: string; error: string }>;
-	panel_models: string[];
-	judge_model: string;
+	failed_models?: Array<{ model: string; error: string }>;
+	panel_models?: string[];
+	judge_model?: string;
+	error?: string;
+	failure_reason?: "all_panels_failed" | "insufficient_credits" | "rate_limited" | "unexpected_error";
 }
 
 export interface ResolvedPanel {

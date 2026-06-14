@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+- Refactored toward OpenRouter-style server-tool semantics.
+- `fusion` tool now returns structured JSON-like tool content for the active model to consume.
+- `/fusion <prompt>` now force-prompts the active pi model to call the fusion tool and then answer normally.
+- Added `/fusion-report <prompt>` for raw panel/judge diagnostic reports.
+- Tool calls inherit session panel/judge selection from `/fusion-setup` unless explicit parameters override it.
+- Added OpenRouter-compatible `model` judge parameter while keeping `judge_model` as an alias.
+- Aligns tool status with OpenRouter: `ok` if at least one panel model succeeds; hard `error` only when all panel models fail.
+
 ## 0.2.0
 
 - Redesigned fusion UX around a single setup UI.
