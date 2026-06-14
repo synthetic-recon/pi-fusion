@@ -24,7 +24,6 @@ import { resolveFusionModels, runFusion } from "./fusion.ts";
 import { listAuthedModels, modelDisplay } from "./models.ts";
 import { renderConfigStatus, selectFusionSetup, showConfigSummary, type FusionSetupState } from "./ui.ts";
 import type { FusionOptions } from "./types.ts";
-
 const FusionParams = Type.Object(
 	{
 		prompt: Type.String({
@@ -214,6 +213,13 @@ export default function (pi: ExtensionAPI) {
 				updateStatus(ctx, sessionState.selectedIds, sessionState.judgeId);
 			}
 
+			const overrides: FusionOptions = sessionState?.selectedIds.size
+				? {
+						analysis_models: Array.from(sessionState.selectedIds),
+						judge_model: sessionState.judgeId ?? Array.from(sessionState.selectedIds)[0],
+				  }
+				: {};
+
 			ctx.ui.setWorkingMessage("Running fusion panel...");
 			try {
 				const fusionResult = await runFusion(
@@ -222,7 +228,7 @@ export default function (pi: ExtensionAPI) {
 					ctx.model,
 					prompt,
 					ctx.isProjectTrusted(),
-					{},
+					overrides,
 					ctx.signal,
 				);
 				ctx.ui.setEditorText(fusionResult.content[0].text);

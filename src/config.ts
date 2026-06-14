@@ -115,15 +115,11 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
 }
 
 export function applyDefaults(config: FusionConfig, overrides: {
-	analysis_models?: string[];
-	judge_model?: string;
 	max_completion_tokens?: number;
 	temperature?: number;
 }): FusionConfig {
 	return {
 		...config,
-		...(overrides.analysis_models ? { panel: overrides.analysis_models } : {}),
-		...(overrides.judge_model ? { judge: overrides.judge_model } : {}),
 		...(overrides.max_completion_tokens ? { maxCompletionTokens: overrides.max_completion_tokens } : {}),
 		...(overrides.temperature !== undefined ? { temperature: overrides.temperature } : {}),
 	};

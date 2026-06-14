@@ -61,7 +61,11 @@ export function formatResult(
 		);
 	}
 
-	if (analysis) {
+	if (responses.length < 2) {
+		lines.push(
+			"\n*Only one panel model produced a response. Skipping multi-model synthesis; see the raw response below.*",
+		);
+	} else if (analysis) {
 		lines.push("\n" + formatAnalysis(analysis));
 	} else {
 		lines.push("\n*Judge analysis unavailable. See raw panel responses below.*");

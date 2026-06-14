@@ -54,6 +54,8 @@ export function selectDiversePanel(available: Model<Api>[], max: number): Model<
 }
 
 export interface ResolveOptions {
+	sessionPanel?: string[];
+	sessionJudge?: string;
 	configPanel?: string[];
 	configJudge?: string;
 	configMaxPanelModels?: number;
@@ -64,6 +66,31 @@ export interface ResolveResult {
 	panel: Model<Api>[];
 	judge: Model<Api>;
 	warnings: string[];
+}
+
+function resolvePanelIdentifiers(
+	registry: ModelRegistry,
+	identifiers: string[],
+	maxPanel: number,
+	warnings: string[],
+): Model<Api>[] {
+	const panel: Model<Api>[] = [];
+	for (const id of identifiers) {
+		const resolved = resolveModelIdentifier(registry, id);
+		if (!resolved) {
+			warnings.push(`Unknown model identifier: ${id}`);
+			continue;
+		}
+		if (!registry.hasConfiguredAuth(resolved)) {
+			warnings.push(`Model not authed: ${modelDisplay(resolved)}`);
+			continue;
+		}
+		if (!panel.some((m) => m.provider === resolved.provider && m.id === resolved.id)) {
+			panel.push(resolved);
+		}
+		if (panel.length >= maxPanel) break;
+	}
+	return panel;
 }
 
 export async function resolvePanelAndJudge(
@@ -78,32 +105,29 @@ export async function resolvePanelAndJudge(
 
 	let panel: Model<Api>[] = [];
 
-	if (options.configPanel && options.configPanel.length > 0) {
-		for (const id of options.configPanel) {
-			const resolved = resolveModelIdentifier(registry, id);
-			if (!resolved) {
-				warnings.push(`Unknown model identifier: ${id}`);
-				continue;
-			}
-			if (!registry.hasConfiguredAuth(resolved)) {
-				warnings.push(`Model not authed: ${modelDisplay(resolved)}`);
-				continue;
-			}
-			if (!panel.some((m) => m.provider === resolved.provider && m.id === resolved.id)) {
-				panel.push(resolved);
-			}
-			if (panel.length >= maxPanel) break;
+	// 1. Session selection has highest priority.
+	if (options.sessionPanel && options.sessionPanel.length > 0) {
+		panel = resolvePanelIdentifiers(registry, options.sessionPanel, maxPanel, warnings);
+		if (panel.length === 0) {
+			warnings.push("Session panel contained no authed models; falling back to config/auto-selection.");
 		}
+	}
+
+	// 2. File config panel.
+	if (panel.length === 0 && options.configPanel && options.configPanel.length > 0) {
+		panel = resolvePanelIdentifiers(registry, options.configPanel, maxPanel, warnings);
 		if (panel.length === 0) {
 			warnings.push("Explicit panel contained no authed models; falling back to auto-selection.");
 		}
 	}
 
+	// 3. Auto-diverse selection.
 	if (panel.length === 0) {
 		const available = registry.getAvailable();
 		panel = selectDiversePanel(available, maxPanel);
 	}
 
+	// 4. Final fallback to current model.
 	if (panel.length === 0 && options.currentModel && registry.hasConfiguredAuth(options.currentModel)) {
 		panel = [options.currentModel];
 	}
@@ -112,11 +136,14 @@ export async function resolvePanelAndJudge(
 		throw new Error("No authed models available for the fusion panel. Configure models in ~/.pi/agent/fusion.json or authenticate more providers.");
 	}
 
+	// Resolve judge: session > config > current model > first panel model.
 	let judge: Model<Api> | undefined;
-	if (options.configJudge) {
-		const resolved = resolveModelIdentifier(registry, options.configJudge);
+
+	for (const candidateId of [options.sessionJudge, options.configJudge]) {
+		if (judge || !candidateId) continue;
+		const resolved = resolveModelIdentifier(registry, candidateId);
 		if (!resolved) {
-			warnings.push(`Unknown judge identifier: ${options.configJudge}`);
+			warnings.push(`Unknown judge identifier: ${candidateId}`);
 		} else if (!registry.hasConfiguredAuth(resolved)) {
 			warnings.push(`Judge model not authed: ${modelDisplay(resolved)}`);
 		} else {

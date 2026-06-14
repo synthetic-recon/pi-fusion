@@ -29,6 +29,8 @@ export async function resolveFusionModels(
 	const baseConfig = loadConfig(cwd, projectTrusted);
 	const config = applyDefaults(baseConfig, overrides);
 	return resolvePanelAndJudge(registry, {
+		sessionPanel: overrides.analysis_models,
+		sessionJudge: overrides.judge_model,
 		configPanel: config.panel,
 		configJudge: config.judge,
 		configMaxPanelModels: config.maxPanelModels,
@@ -53,13 +55,14 @@ export async function runFusion(
 	const maxCompletionTokens = config.maxCompletionTokens ?? DEFAULT_MAX_COMPLETION_TOKENS;
 	const temperature = config.temperature ?? DEFAULT_TEMPERATURE;
 
-	const { panel, judge, warnings } = await resolveFusionModels(
-		cwd,
-		registry,
+	const { panel, judge, warnings } = await resolvePanelAndJudge(registry, {
+		sessionPanel: overrides.analysis_models,
+		sessionJudge: overrides.judge_model,
+		configPanel: config.panel,
+		configJudge: config.judge,
+		configMaxPanelModels: config.maxPanelModels,
 		currentModel,
-		projectTrusted,
-		overrides,
-	);
+	});
 
 	const panelModelNames = panel.map(modelDisplay);
 	const judgeName = modelDisplay(judge);
@@ -106,46 +109,54 @@ export async function runFusion(
 		content: [
 			{
 				type: "text",
-				text: `Panel complete (${successful.length}/${panel.length}). Running judge...`,
+				text:
+					successful.length === 1
+						? `Panel complete (${successful.length}/${panel.length}). Only one model succeeded; skipping judge synthesis.`
+						: `Panel complete (${successful.length}/${panel.length}). Running judge...`,
 			},
 		],
-		details: { phase: "judging" },
+		details: { phase: successful.length === 1 ? "single_response" : "judging" },
 	});
 
-	// Run judge.
-	const judgeBudgetPerResponse = Math.max(
-		1024,
-		Math.floor(judge.contextWindow / Math.max(successful.length * 2, 8)),
-	);
-	const judgeUserText =
-		`Task:\n${prompt}\n\n` +
-		successful
-			.map(
-				(r) =>
-					`--- Response from ${r.model} ---\n${truncateForJudge(r.content, judgeBudgetPerResponse)}`,
-			)
-			.join("\n\n");
-
 	let analysis: FusionAnalysis | undefined;
-	try {
-		const judgeResponse = await callModelText(
-			registry,
-			judge,
-			JUDGE_SYSTEM_PROMPT,
-			judgeUserText,
-			maxCompletionTokens,
-			temperature,
-			signal,
+	if (successful.length >= 2) {
+		// Run judge.
+		const judgeBudgetPerResponse = Math.max(
+			1024,
+			Math.floor(judge.contextWindow / Math.max(successful.length * 2, 8)),
 		);
-		const judgeText = getTextContent(judgeResponse);
-		analysis = extractJson<FusionAnalysis>(judgeText);
-	} catch (err) {
-		console.error("[pi-fusion] judge failed:", err);
-		analysis = undefined;
+		const judgeUserText =
+			`Task:\n${prompt}\n\n` +
+			successful
+				.map(
+					(r) =>
+						`--- Response from ${r.model} ---\n${truncateForJudge(r.content, judgeBudgetPerResponse)}`,
+				)
+				.join("\n\n");
+
+		try {
+			const judgeResponse = await callModelText(
+				registry,
+				judge,
+				JUDGE_SYSTEM_PROMPT,
+				judgeUserText,
+				maxCompletionTokens,
+				temperature,
+				signal,
+			);
+			const judgeText = getTextContent(judgeResponse);
+			analysis = extractJson<FusionAnalysis>(judgeText);
+		} catch (err) {
+			console.error("[pi-fusion] judge failed:", err);
+			analysis = undefined;
+		}
 	}
 
+	const status: FusionDetails["status"] =
+		successful.length < 2 ? "degraded" : analysis ? "ok" : "degraded";
+
 	const details: FusionDetails = {
-		status: analysis ? "ok" : "degraded",
+		status,
 		analysis,
 		responses: successful.map((r) => ({ model: r.model, content: r.content })),
 		failed_models: failed.map((f) => ({ model: f.model, error: f.error })),
