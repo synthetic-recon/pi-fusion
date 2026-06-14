@@ -1,21 +1,17 @@
-name: CI
+name: Release
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags:
+      - "v*"
 
+# OIDC trusted publishing to npm (no NPM_TOKEN secret needed).
 permissions:
   contents: read
-
-# Cancel superseded runs on the same ref to save CI minutes.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  id-token: write
 
 jobs:
-  check:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,12 +20,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          registry-url: "https://registry.npmjs.org"
           cache: npm
+      - name: Upgrade npm (trusted publishing needs >=11.5.1)
+        run: npm install -g npm@latest
       - name: Install
         run: npm ci
       - name: Typecheck
         run: npm run check
       - name: Test
         run: npm test
-      - name: Package dry run
-        run: npm pack --dry-run
+      - name: Publish
+        run: npm publish
