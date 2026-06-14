@@ -14,6 +14,9 @@
   "homepage": "https://github.com/synthetic-recon/pi-fusion#readme",
   "keywords": ["pi-package", "pi-extension", "fusion", "multi-model", "coding-agent", "llm", "openrouter"],
   "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "files": [
     "src/*.ts",
     "README.md",
