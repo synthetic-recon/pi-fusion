@@ -98,16 +98,17 @@ export async function resolvePanelAndJudge(
 	options: ResolveOptions,
 ): Promise<ResolveResult> {
 	const warnings: string[] = [];
-	const maxPanel = Math.min(
+	const configuredMaxPanel = Math.min(
 		options.configMaxPanelModels ?? 3,
 		MAX_PANEL_MODELS_HARD_LIMIT,
 	);
+	const sessionMaxPanel = MAX_PANEL_MODELS_HARD_LIMIT;
 
 	let panel: Model<Api>[] = [];
 
 	// 1. Session selection has highest priority.
 	if (options.sessionPanel && options.sessionPanel.length > 0) {
-		panel = resolvePanelIdentifiers(registry, options.sessionPanel, maxPanel, warnings);
+		panel = resolvePanelIdentifiers(registry, options.sessionPanel, sessionMaxPanel, warnings);
 		if (panel.length === 0) {
 			warnings.push("Session panel contained no authed models; falling back to config/auto-selection.");
 		}
@@ -115,7 +116,7 @@ export async function resolvePanelAndJudge(
 
 	// 2. File config panel.
 	if (panel.length === 0 && options.configPanel && options.configPanel.length > 0) {
-		panel = resolvePanelIdentifiers(registry, options.configPanel, maxPanel, warnings);
+		panel = resolvePanelIdentifiers(registry, options.configPanel, configuredMaxPanel, warnings);
 		if (panel.length === 0) {
 			warnings.push("Explicit panel contained no authed models; falling back to auto-selection.");
 		}
@@ -124,7 +125,7 @@ export async function resolvePanelAndJudge(
 	// 3. Auto-diverse selection.
 	if (panel.length === 0) {
 		const available = registry.getAvailable();
-		panel = selectDiversePanel(available, maxPanel);
+		panel = selectDiversePanel(available, configuredMaxPanel);
 	}
 
 	// 4. Final fallback to current model.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- Fixed footer/run mismatch where an explicit 4-model session panel displayed as 4 in the footer but only ran 3 models.
+- Session-selected panels now run all selected models up to the hard limit of 8.
+- Auto-selected panels still default to 3 models.
+- Added regression tests for explicit session panel size vs auto default size.
+
 ## 0.3.0
 
 - Simplified operation around one session toggle.
