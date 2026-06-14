@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible problem with pi-fusion
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please remove secrets, API keys, and private repository content.
+  - type: input
+    id: pi-version
+    attributes:
+      label: pi version
+      description: Output of `pi --version`.
+    validations:
+      required: true
+  - type: input
+    id: fusion-version
+    attributes:
+      label: pi-fusion version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - npm
+        - git
+        - local path
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include commands/tool calls and relevant config with secrets removed.
+      placeholder: |
+        1. Run /fusion-setup
+        2. Select ...
+        3. Run ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Optional. Remove secrets and private content.

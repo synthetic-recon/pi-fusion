@@ -22,23 +22,36 @@ If no config exists, it auto-picks a diverse panel from `ctx.modelRegistry.getAv
 
 ## Installation
 
-### Option A: install as a pi package (recommended)
-
-```bash
-pi install ~/.pi/agent/extensions/pi-fusion
-```
-
-Or install globally from npm/git once published:
+### npm package
 
 ```bash
 pi install npm:pi-fusion
 ```
 
-### Option B: drop into extensions directory
+### GitHub package
 
-The files are already at `~/.pi/agent/extensions/pi-fusion/`, so they are
-auto-discovered. Run `/reload` in an existing pi session to load them
-immediately.
+```bash
+pi install git:github.com/synthetic-recon/pi-fusion
+```
+
+### Local development checkout
+
+```bash
+git clone https://github.com/synthetic-recon/pi-fusion.git
+cd pi-fusion
+npm install
+npm run check
+npm test
+pi -e .
+```
+
+Or install a local checkout into pi:
+
+```bash
+pi install /path/to/pi-fusion
+```
+
+Run `/reload` in an existing pi session after changing or installing the extension.
 
 ## Configuration
 
@@ -49,13 +62,19 @@ Create one of:
 
 Project-local `fusion.json` is only loaded for trusted projects.
 
-Quick-start with the interactive selector or template generator:
+Quick-start:
+
+```
+/fusion-setup     # choose panel and judge via UI
+/fusion           # toggle forced Fusion mode on/off
+/fusion-status    # show current mode, panel, and judge
+```
+
+Optional config template:
 
 ```
 /fusion-init      # creates .pi/fusion.json template
 /fusion-config    # show active config
-/fusion-setup     # choose panel and judge via UI
-/fusion-run       # choose setup + prompt, then ask the active model to use fusion
 ```
 
 Example `fusion.json`:
@@ -190,11 +209,13 @@ Use `/fusion-clear` to remove it.
 ## Development
 
 ```bash
-cd ~/.pi/agent/extensions/pi-fusion
 npm install   # installs peer deps for type checking
 npm run check # TypeScript --noEmit
 npm test      # runs the test files under src/__tests__/
+npm pack --dry-run
 ```
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the GitHub issue templates.
 
 ## Differences from OpenRouter Fusion
 

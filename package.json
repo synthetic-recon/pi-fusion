@@ -3,8 +3,30 @@
   "version": "0.4.0",
   "description": "Multi-model deliberation for pi, inspired by OpenRouter Fusion",
   "type": "module",
-  "keywords": ["pi-package", "pi-extension", "fusion", "multi-model"],
+  "main": "./src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/synthetic-recon/pi-fusion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/synthetic-recon/pi-fusion/issues"
+  },
+  "homepage": "https://github.com/synthetic-recon/pi-fusion#readme",
+  "keywords": ["pi-package", "pi-extension", "fusion", "multi-model", "coding-agent", "llm", "openrouter"],
   "license": "MIT",
+  "files": [
+    "src/*.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE",
+    "tsconfig.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "clean": "rm -rf node_modules",
     "build": "echo 'pi-fusion is loaded directly by pi via jiti; no build step required'",
