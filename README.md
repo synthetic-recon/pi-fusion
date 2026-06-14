@@ -25,7 +25,7 @@ When two or more panel models answer, the judge synthesis runs. If only one mode
 
 ```bash
 pi install npm:pi-fusion                          # from npm
-pi install git:github.com/syntheticrecon/pi-fusion # from GitHub
+pi install git:github.com/synthetic-recon/pi-fusion # from GitHub
 pi install /path/to/pi-fusion                      # from a local checkout
 ```
 

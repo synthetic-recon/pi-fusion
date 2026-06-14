@@ -6,12 +6,12 @@
   "main": "./src/index.ts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/syntheticrecon/pi-fusion.git"
+    "url": "git+https://github.com/synthetic-recon/pi-fusion.git"
   },
   "bugs": {
-    "url": "https://github.com/syntheticrecon/pi-fusion/issues"
+    "url": "https://github.com/synthetic-recon/pi-fusion/issues"
   },
-  "homepage": "https://github.com/syntheticrecon/pi-fusion#readme",
+  "homepage": "https://github.com/synthetic-recon/pi-fusion#readme",
   "keywords": ["pi-package", "pi-extension", "fusion", "multi-model", "coding-agent", "llm", "openrouter"],
   "license": "MIT",
   "files": [
