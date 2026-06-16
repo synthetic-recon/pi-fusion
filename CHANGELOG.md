@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2
+
+- A panel model that returns no text (e.g. it spent its turns on tools, hit the loop guard, or ran out of token budget) is now reported as a **failed** panel instead of a blank "successful" response, so the judge only synthesizes real answers.
+- The panel tool-loop circuit breaker now trips only on a **tight** stuck-loop — the exact same tool call (tool + arguments) 3× in a row, or 3 consecutive errors. Varied tool use (same tool, different paths/queries) no longer counts toward it.
+
 ## 0.7.1
 
 - Add a README banner and a package gallery image (`pi.image`) so listings show artwork.
