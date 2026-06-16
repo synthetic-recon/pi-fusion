@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.3
+
+- When a panel model hits the tool-call limit (or the loop guard), it's now told via the system prompt to write its final answer from what it gathered — some models otherwise went silent when tools were removed, returning empty.
+- Default `maxToolCalls` raised from 8 to 16 (a per-panel-model budget). Since models batch several tool calls per turn, 8 was often only ~1–2 turns of exploration before a forced finalize; 16 gives tool-enabled panels usable depth out of the box. `/fusion-setup` presets now include 16.
+
 ## 0.7.2
 
 - A panel model that returns no text (e.g. it spent its turns on tools, hit the loop guard, or ran out of token budget) is now reported as a **failed** panel instead of a blank "successful" response, so the judge only synthesizes real answers.

@@ -1,6 +1,6 @@
 {
   "name": "pi-fusion",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Multi-model deliberation for pi, inspired by OpenRouter Fusion",
   "type": "module",
   "main": "./src/index.ts",
