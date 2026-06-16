@@ -158,7 +158,7 @@ export async function runFusion(
 		const details: FusionDetails = {
 			status: "error",
 			responses: [],
-			failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error" })),
+			failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error", ...(f.tools ? { tools: f.tools } : {}) })),
 			panel_models: panelModelNames,
 			judge_model: judgeName,
 			...(warnings.length > 0 ? { warnings } : {}),
@@ -220,7 +220,7 @@ export async function runFusion(
 		analysis,
 		responses: successful.map((r) => ({ model: r.model, content: r.content, ...(r.tools ? { tools: r.tools } : {}) })),
 		...(failed.length > 0
-			? { failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error" })) }
+			? { failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error", ...(f.tools ? { tools: f.tools } : {}) })) }
 			: {}),
 		panel_models: panelModelNames,
 		judge_model: judgeName,

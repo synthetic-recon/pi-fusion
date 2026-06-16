@@ -14,13 +14,9 @@ import { Type } from "typebox";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-	DEFAULT_MAX_COMPLETION_TOKENS,
 	DEFAULT_MAX_TOOL_CALLS,
-	DEFAULT_TEMPERATURE,
 	generateConfigExample,
 	loadConfig,
-	MAX_TOOL_CALLS,
-	MIN_TOOL_CALLS,
 } from "./config.ts";
 import { buildRecentContextFromEntries, type FusionContextMode, normalizeContextTurns } from "./context.ts";
 import { resolveFusionModels, runFusion } from "./fusion.ts";
@@ -35,23 +31,10 @@ const FusionParams = Type.Object(
 			description:
 				"The question, task, or topic to analyze. Be specific enough for independent models to answer.",
 		}),
-		// Panel and judge models are NOT tool parameters: they are configured by the user
-		// via /fusion-setup (session) or fusion.json, and always take precedence. The tool
-		// must not choose panel/judge models.
-		max_completion_tokens: Type.Optional(
-			Type.Integer({
-				description: "Max tokens for each panel response and the judge analysis.",
-				default: DEFAULT_MAX_COMPLETION_TOKENS,
-			}),
-		),
-		temperature: Type.Optional(
-			Type.Number({
-				description: "Sampling temperature for panel and judge calls (0–2).",
-				minimum: 0,
-				maximum: 2,
-				default: DEFAULT_TEMPERATURE,
-			}),
-		),
+		// The fusion tool exposes ONLY the prompt and the conversation-context controls.
+		// Panel, judge, tool access, max tool calls, temperature, and token budgets are all
+		// user configuration (set via /fusion-setup or fusion.json) and always take
+		// precedence — the invoking model must not override the user's setup.
 		context_mode: Type.Optional(
 			Type.Union([
 				Type.Literal("none"),
@@ -68,24 +51,6 @@ const FusionParams = Type.Object(
 				minimum: 1,
 				maximum: 10,
 				default: 4,
-			}),
-		),
-		panel_tools: Type.Optional(
-			Type.Union([
-				Type.Literal("none"),
-				Type.Literal("readonly"),
-				Type.Literal("all"),
-			], {
-				description:
-					"Panel tool access for this call: 'none' (default), 'readonly' (read/grep/find/ls), or 'all' (adds bash/edit/write; requires prior consent or it downgrades to read-only).",
-			}),
-		),
-		max_tool_calls: Type.Optional(
-			Type.Integer({
-				description: "Max tool-call steps per panel model when tools are enabled (1–100). Default 16.",
-				minimum: MIN_TOOL_CALLS,
-				maximum: MAX_TOOL_CALLS,
-				default: DEFAULT_MAX_TOOL_CALLS,
 			}),
 		),
 	},
@@ -431,15 +396,15 @@ export default function (pi: ExtensionAPI) {
 			const contextText = contextMode === "recent"
 				? buildRecentContextFromEntries(ctx.sessionManager.getBranch(), normalizeContextTurns(params.context_turns))
 				: undefined;
-			// Panel/judge come ONLY from the user's session selection (then fusion.json,
-			// then auto-selection inside runFusion). The tool/LLM cannot set models.
+			// All config (panel, judge, tools, max-calls, tokens, temperature) comes ONLY from
+			// the user's session selection → fusion.json → defaults, resolved inside runFusion.
+			// The invoking model cannot set or override any of it; it controls only the prompt
+			// and the conversation-context options above.
 			const options: FusionOptions = {
 				analysis_models: sessionOptions.analysis_models,
 				model: sessionOptions.model,
-				max_completion_tokens: params.max_completion_tokens,
-				temperature: params.temperature,
-				panel_tools: (params.panel_tools as ToolMode | undefined) ?? sessionOptions.panel_tools,
-				max_tool_calls: params.max_tool_calls ?? sessionOptions.max_tool_calls,
+				panel_tools: sessionOptions.panel_tools,
+				max_tool_calls: sessionOptions.max_tool_calls,
 				context_text: contextText,
 			};
 			return runFusion(

@@ -90,7 +90,7 @@ export interface FusionDetails {
 	status: "ok" | "error";
 	analysis?: FusionAnalysis;
 	responses: Array<{ model: string; content: string; tools?: PanelToolUsage }>;
-	failed_models?: Array<{ model: string; error: string }>;
+	failed_models?: Array<{ model: string; error: string; tools?: PanelToolUsage }>;
 	panel_models?: string[];
 	judge_model?: string;
 	/** Resolved panel tool mode + cap, when tools were enabled. */

@@ -96,7 +96,7 @@ The active model calls fusion, then writes the final answer itself in its normal
 
 ### Adding conversation context
 
-The **panel and judge are always your configuration**; the model invoking the tool cannot pick them. Set them with `/fusion-setup` (session) or `fusion.json`.
+**All fusion config is yours** — panel, judge, tool access, max tool calls, temperature, and token budgets are set via `/fusion-setup` (session) or `fusion.json`, and the model invoking the tool cannot pick or override any of them. It only supplies the prompt (and may choose whether to include recent conversation context).
 
 Panel and judge calls do **not** see the whole pi conversation thread. When prior context matters, either put the relevant details in the prompt, or ask fusion to include recent turns:
 
@@ -148,7 +148,7 @@ Generate a project-local template with `/fusion-init`, or write one by hand:
 | `maxToolCalls` | 16 | Max tool-call steps **per panel model** when tools are on (1–100). Models batch several calls per turn, so this is the per-agent budget; total ≈ panel size × this. |
 | `panelToolsConsent` | `false` | Pre-authorize mutating tools in non-interactive (`-p`) runs. |
 
-**Precedence.** Panel/judge come from session selection (`/fusion-setup`) → `fusion.json` → auto-selection (the tool cannot set them). Per-call tool params (`panel_tools`, `max_tool_calls`) override session → `fusion.json` → default.
+**Precedence.** Everything resolves session selection (`/fusion-setup`) → `fusion.json` → defaults/auto-selection. The invoking model can't override any of it (the tool takes only the prompt + optional context controls).
 
 **How models are resolved.** Reference models as `provider/id` (e.g. `openai/gpt-5.5`); a bare `id` matches by exact id across providers. Only authed models are used; a configured model that isn't authed is skipped with a warning. With no panel configured, fusion auto-selects a diverse set spread across providers. The judge defaults to your current model, falling back to the first panel model.
 
@@ -159,7 +159,7 @@ By default panel models answer in a single turn with no tools. Enable tools to l
 - **`readonly`** (`read`, `grep`, `find`, `ls`): safe; no mutation.
 - **`all`**: adds `bash`, `edit`, `write`. **Off by default** and requires consent (the `/fusion-setup` picker prompts; non-interactive runs need `"panelToolsConsent": true`). Because several models run concurrently, mutating runs **serialize the panel** so they can't clobber each other's writes. Without consent, `all` downgrades to read-only.
 
-Set tools in `/fusion-setup` (Config section), in `fusion.json`, or per call via `panel_tools` / `max_tool_calls`. The per-call `panel_tools` accepts only `none`/`readonly`/`all`; the explicit tool-name list is `fusion.json`-only.
+Set tools in `/fusion-setup` (Config section) or in `fusion.json` (`panelTools`, `maxToolCalls`). These are user configuration only — the invoking model has no tool parameters to override them.
 
 > **Note:** enabling panel tools means **file contents (and command output for `all`) are sent to every panel model's provider**. Only enable it where that's acceptable.
 
