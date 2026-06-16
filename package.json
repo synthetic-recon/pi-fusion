@@ -39,7 +39,8 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/synthetic-recon/pi-fusion/main/assets/fusion.png"
   },
   "dependencies": {},
   "peerDependencies": {
