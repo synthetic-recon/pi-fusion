@@ -2,20 +2,36 @@
  * Shared types for pi-fusion.
  */
 
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
 
-export type { Api, Model };
+export type { Api, Model, ThinkingLevel };
 
 /** Named panel tool bundles, or an explicit list of tool names. */
 export type ToolMode = "none" | "readonly" | "all";
 export type ToolSelection = ToolMode | string[];
 export type FooterDisplay = "off" | "compact" | "full";
 
+/** A reusable user-owned panel configuration. Global runtime knobs remain shared. */
+export interface NamedPanelConfig {
+	models: string[];
+	judge?: string;
+	panelReasoning?: ThinkingLevel;
+	judgeReasoning?: ThinkingLevel;
+}
+
 export interface FusionConfig {
 	/** Explicit panel model identifiers, e.g. ["anthropic/claude-sonnet-4-5"]. */
 	panel?: string[];
 	/** Explicit judge model identifier. */
 	judge?: string;
+	/** Named reusable panel configurations. */
+	panels?: Record<string, NamedPanelConfig>;
+	/** Named panel used when no explicit/session selection is active. */
+	defaultPanel?: string;
+	/** Reasoning effort applied to panel model calls. */
+	panelReasoning?: ThinkingLevel;
+	/** Reasoning effort applied to judge model calls. */
+	judgeReasoning?: ThinkingLevel;
 	/** Max panel models (1–8). */
 	maxPanelModels?: number;
 	/** Max tokens per panel response. */
@@ -30,7 +46,7 @@ export interface FusionConfig {
 	maxToolCalls?: number;
 	/** Non-interactive consent for mutating tools (bash/edit/write) — required in print/no-UI mode. */
 	panelToolsConsent?: boolean;
-	/** Footer verbosity: "full" (default), "compact", or "off". */
+	/** Fusion status verbosity: "full" (default), "compact", or "off". */
 	footerDisplay?: FooterDisplay;
 }
 
@@ -42,6 +58,29 @@ export type ResolvedFusionConfig = FusionConfig & {
 	temperature: number;
 	maxToolCalls: number;
 };
+
+export type ConfigSelectionSource = "explicit" | "default" | "legacy";
+export type ConfigSelectionErrorCode = "unknown_named_panel" | "invalid_named_panel";
+
+export interface ConfigSelectionError {
+	code: ConfigSelectionErrorCode;
+	panelName: string;
+	message: string;
+}
+
+export type EffectiveConfigResult =
+	| {
+		ok: true;
+		config: ResolvedFusionConfig;
+		profileName?: string;
+		source: ConfigSelectionSource;
+		warnings: string[];
+	}
+	| {
+		ok: false;
+		error: ConfigSelectionError;
+		warnings: string[];
+	};
 
 export interface PanelResult {
 	model: string;
@@ -61,6 +100,8 @@ export interface FusionAnalysis {
 }
 
 export interface FusionOptions {
+	/** Internal user-selected named panel. Never exposed on the registered tool schema. */
+	panel_profile?: string;
 	analysis_models?: string[];
 	/** OpenRouter-compatible judge parameter name. */
 	model?: string;
@@ -72,6 +113,9 @@ export interface FusionOptions {
 	panel_tools?: ToolMode;
 	/** Per-call max tool-call steps per panel model (1–100). */
 	max_tool_calls?: number;
+	/** Internal session/config reasoning snapshots. Never exposed on the registered tool schema. */
+	panel_reasoning?: ThinkingLevel;
+	judge_reasoning?: ThinkingLevel;
 	/** Internal/context-expanded text built by the extension from session history. */
 	context_text?: string;
 }
@@ -96,6 +140,12 @@ export interface FusionDetails {
 	failed_models?: Array<{ model: string; error: string; tools?: PanelToolUsage }>;
 	panel_models?: string[];
 	judge_model?: string;
+	/** Effective named panel, when resolution selected one. */
+	panel_profile?: string;
+	/** Requested effort and the actual effort sent to each panel model (`null` when omitted). */
+	panel_reasoning?: { requested: ThinkingLevel; effective: Record<string, ThinkingLevel | null> };
+	/** Requested judge effort and the actual effort sent (`null` when omitted). */
+	judge_reasoning?: { requested: ThinkingLevel; effective: ThinkingLevel | null };
 	/** Resolved panel tool mode + cap, when tools were enabled. */
 	panel_tools?: { mode: string; max_tool_calls: number; serialized: boolean };
 	/** Non-fatal warnings (unauthed models, tool downgrades, etc.). */

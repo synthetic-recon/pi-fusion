@@ -9,7 +9,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type AutocompleteItem, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,15 +17,16 @@ import {
 	DEFAULT_MAX_TOOL_CALLS,
 	generateConfigExample,
 	loadConfig,
+	resolveEffectiveConfig,
 	type FusionConfig,
 } from "./config.ts";
 import { buildRecentContextFromEntries, type FusionContextMode, normalizeContextTurns } from "./context.ts";
-import { resolveFusionModels, runFusion } from "./fusion.ts";
+import { resolveFusionModels, resolveFusionSelection, runFusion } from "./fusion.ts";
 import { modelDisplay } from "./models.ts";
 import { clampMaxToolCalls, isMutatingSelection, selectionLabel } from "./tools.ts";
-import { selectFusionSetup, type FusionMode, type FusionSetupState } from "./ui.ts";
+import { selectFusionSetup, type FusionMode, type FusionSetupProfile, type FusionSetupState } from "./ui.ts";
 import { formatResult } from "./format.ts";
-import type { FooterDisplay, FusionOptions, ToolMode } from "./types.ts";
+import type { FooterDisplay, FusionOptions, ThinkingLevel, ToolMode } from "./types.ts";
 const FusionParams = Type.Object(
 	{
 		prompt: Type.String({
@@ -58,33 +59,59 @@ const FusionParams = Type.Object(
 	{ description: "Multi-model deliberation parameters" },
 );
 
-function formatTokens(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-	if (count < 1000000) return `${Math.round(count / 1000)}k`;
-	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
-	return `${Math.round(count / 1000000)}M`;
+export type PanelCommandParseResult =
+	| { ok: true; prompt: string; panelName?: string }
+	| { ok: false; error: string };
+
+/** Consume only a leading `--panel <name>` pair; the remaining prompt is opaque. */
+export function parsePanelCommand(args: string): PanelCommandParseResult {
+	if (!args.startsWith("--panel") || (args.length > 7 && !/\s/.test(args[7]))) {
+		return { ok: true, prompt: args.trim() };
+	}
+	let cursor = 7;
+	while (cursor < args.length && /\s/.test(args[cursor])) cursor++;
+	if (cursor >= args.length) return { ok: false, error: "Missing named panel name after --panel." };
+	const nameStart = cursor;
+	while (cursor < args.length && !/\s/.test(args[cursor])) cursor++;
+	const panelName = args.slice(nameStart, cursor);
+	if (cursor >= args.length) return { ok: false, error: `Missing prompt after named panel "${panelName}".` };
+	const prompt = args.slice(cursor + 1);
+	if (!prompt.trim()) return { ok: false, error: `Missing prompt after named panel "${panelName}".` };
+	return { ok: true, panelName, prompt };
 }
 
-function formatCwd(cwd: string): string {
-	const home = process.env.HOME || process.env.USERPROFILE;
-	if (home && cwd === home) return "~";
-	if (home && cwd.startsWith(`${home}/`)) return `~/${cwd.slice(home.length + 1)}`;
-	return cwd;
+export interface PendingPanelSelection {
+	panelName: string;
+	sessionId: string;
+	agentActive: boolean;
 }
 
-function alignLine(left: string, right: string, width: number): string {
-	const leftWidth = visibleWidth(left);
-	const rightWidth = visibleWidth(right);
-	if (leftWidth + 2 + rightWidth <= width) {
-		return left + " ".repeat(width - leftWidth - rightWidth) + right;
+export function armPendingPanel(panelName: string, sessionId: string): PendingPanelSelection {
+	return { panelName, sessionId, agentActive: false };
+}
+
+export function activatePendingPanel(
+	pending: PendingPanelSelection | undefined,
+	sessionId: string,
+): PendingPanelSelection | undefined {
+	return pending?.sessionId === sessionId ? { ...pending, agentActive: true } : pending;
+}
+
+export function consumePendingPanel(
+	pending: PendingPanelSelection | undefined,
+	sessionId: string,
+): { panelName: string | undefined; pending: PendingPanelSelection | undefined } {
+	if (!pending || pending.sessionId !== sessionId || !pending.agentActive) {
+		return { panelName: undefined, pending };
 	}
-	const availableLeft = Math.max(0, width - rightWidth - 2);
-	if (availableLeft > 0) {
-		const truncatedLeft = truncateToWidth(left, availableLeft, "...");
-		return truncatedLeft + " ".repeat(Math.max(1, width - visibleWidth(truncatedLeft) - rightWidth)) + right;
-	}
-	return truncateToWidth(right, width, "");
+	return { panelName: pending.panelName, pending: undefined };
+}
+
+export function clearPendingPanel(
+	pending: PendingPanelSelection | undefined,
+	sessionId: string,
+): PendingPanelSelection | undefined {
+	return pending?.sessionId === sessionId ? undefined : pending;
 }
 
 function normalizeMode(state: { enabled?: boolean; mode?: FusionMode } | undefined): FusionMode {
@@ -108,35 +135,7 @@ function effectiveFooterDisplay(ctx: ExtensionContext): FooterDisplay {
 }
 
 function footerStatusLine(display: FooterDisplay): string {
-	return `Footer: ${display}`;
-}
-
-function sanitizeFooterStatusText(text: string): string {
-	return text
-		.replace(/\x1B[\]PX^_][^\x07\x1B]*(?:\x07|\x1B\\)/g, "")
-		.replace(/[\x90\x98\x9D\x9E\x9F][^\x07\x9C]*(?:\x07|\x9C)/g, "")
-		.replace(/\x9B[0-?]*[ -/]*[@-~]/g, "")
-		.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
-		.replace(/[\r\n\t]/g, " ")
-		.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "")
-		.replace(/ +/g, " ")
-		.trim();
-}
-
-export function formatExtensionStatusLine(
-	extensionStatuses: ReadonlyMap<string, string>,
-	width: number,
-	ellipsis = "...",
-): string | undefined {
-	if (extensionStatuses.size === 0) return undefined;
-	const statusLine = Array.from(extensionStatuses.entries())
-		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([, text]) => sanitizeFooterStatusText(text))
-		.filter((text) => text.length > 0)
-		.join(" ");
-	if (!statusLine) return undefined;
-	const truncated = truncateToWidth(statusLine, width, ellipsis);
-	return ellipsis.includes("\x1B") ? truncated : truncated.replace(/\x1B\[0m/g, "");
+	return `Fusion status: ${display}`;
 }
 
 export function fusionFooterText(
@@ -144,13 +143,20 @@ export function fusionFooterText(
 	judgeId: string | undefined,
 	mode: FusionMode = "available",
 	display: FooterDisplay = "full",
+	state?: Pick<FusionSetupState, "profileName" | "panelReasoning" | "judgeReasoning">,
 ): string | undefined {
 	if (display === "off") return undefined;
 	if (selectedIds.size === 0) return mode === "off" ? "Fusion off" : undefined;
 	const panel = Array.from(selectedIds);
 	if (display === "compact") return `${modeLabel(mode)} • ${panel.length} panel`;
 	const judge = judgeId ?? panel[0];
-	return `${modeLabel(mode)} • ${panel.length} panel • judge ${judge}`;
+	const parts = [modeLabel(mode)];
+	if (state?.profileName) parts.push(`named panel ${state.profileName}`);
+	parts.push(`${panel.length} panel`);
+	if (state?.panelReasoning) parts.push(`panel reasoning ${state.panelReasoning}`);
+	if (state?.judgeReasoning) parts.push(`judge reasoning ${state.judgeReasoning}`);
+	parts.push(`judge ${judge}`);
+	return parts.join(" • ");
 }
 
 /** Footer/status suffix describing panel tool access, when enabled. */
@@ -169,94 +175,16 @@ function toolsStatusLine(state: FusionSetupState | undefined): string {
 }
 
 function updateStatus(
-	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	selectedIds: Set<string>,
 	judgeId: string | undefined,
 	mode: FusionMode = "available",
 ) {
-	ctx.ui.setStatus("fusion", undefined);
-	ctx.ui.setWidget("fusion-panel", undefined);
-
 	const footerDisplay = effectiveFooterDisplay(ctx);
-	const baseText = fusionFooterText(selectedIds, judgeId, mode, footerDisplay);
-	const fusionText = baseText && footerDisplay === "full" ? baseText + toolsSuffix(effectiveDisplayState(ctx)) : baseText;
-	if (!fusionText) {
-		// Restore Pi's built-in footer when pi-fusion has nothing to add.
-		ctx.ui.setFooter(undefined);
-		return;
-	}
-
-	ctx.ui.setFooter((tui, theme, footerData) => {
-		const unsub = footerData.onBranchChange(() => tui.requestRender());
-		return {
-			dispose: unsub,
-			invalidate() {},
-			render(width: number): string[] {
-				let input = 0;
-				let output = 0;
-				let cacheRead = 0;
-				let cacheWrite = 0;
-				let cost = 0;
-				let latestCacheHitRate: number | undefined;
-
-				for (const entry of ctx.sessionManager.getEntries()) {
-					if (entry.type === "message" && entry.message.role === "assistant") {
-						const usage = entry.message.usage;
-						input += usage.input;
-						output += usage.output;
-						cacheRead += usage.cacheRead;
-						cacheWrite += usage.cacheWrite;
-						cost += usage.cost.total;
-						const latestPromptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-						latestCacheHitRate = latestPromptTokens > 0 ? (usage.cacheRead / latestPromptTokens) * 100 : undefined;
-					}
-				}
-
-				const contextUsage = ctx.getContextUsage();
-				const contextWindow = contextUsage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-				const contextPercent = contextUsage?.percent === null ? "?" : (contextUsage?.percent ?? 0).toFixed(1);
-				const stats: string[] = [];
-				if (input) stats.push(`↑${formatTokens(input)}`);
-				if (output) stats.push(`↓${formatTokens(output)}`);
-				if (cacheRead) stats.push(`R${formatTokens(cacheRead)}`);
-				if (cacheWrite) stats.push(`W${formatTokens(cacheWrite)}`);
-				if ((cacheRead > 0 || cacheWrite > 0) && latestCacheHitRate !== undefined) {
-					stats.push(`CH${latestCacheHitRate.toFixed(1)}%`);
-				}
-				const usingSubscription = ctx.model ? ctx.modelRegistry.isUsingOAuth(ctx.model) : false;
-				if (cost || usingSubscription) stats.push(`$${cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
-				stats.push(`${contextPercent}%/${formatTokens(contextWindow)} (auto)`);
-
-				let cwd = formatCwd(ctx.cwd);
-				const branch = footerData.getGitBranch();
-				if (branch) cwd += ` (${branch})`;
-				const sessionName = ctx.sessionManager.getSessionName();
-				if (sessionName) cwd += ` • ${sessionName}`;
-
-				let model = ctx.model?.id ?? "no-model";
-				if (ctx.model?.reasoning) {
-					const thinking = pi.getThinkingLevel();
-					model = thinking === "off" ? `${model} • thinking off` : `${model} • ${thinking}`;
-				}
-				if (ctx.model && footerData.getAvailableProviderCount() > 1) {
-					const withProvider = `(${ctx.model.provider}) ${model}`;
-					if (visibleWidth(withProvider) < width) model = withProvider;
-				}
-
-				const top = alignLine(theme.fg("dim", cwd), fusionText ? theme.fg("dim", fusionText) : "", width);
-				const bottom = alignLine(theme.fg("dim", stats.join(" ")), theme.fg("dim", model), width);
-				const lines = [top, bottom];
-				const extensionStatusLine = formatExtensionStatusLine(
-					footerData.getExtensionStatuses(),
-					width,
-					theme.fg("dim", "..."),
-				);
-				if (extensionStatusLine) lines.push(extensionStatusLine);
-				return lines;
-			},
-		};
-	});
+	const state = effectiveDisplayState(ctx);
+	const baseText = fusionFooterText(selectedIds, judgeId, mode, footerDisplay, state);
+	const fusionText = baseText && footerDisplay === "full" ? baseText + toolsSuffix(state) : baseText;
+	ctx.ui.setStatus("fusion", fusionText);
 }
 
 function persistSessionState(
@@ -264,17 +192,19 @@ function persistSessionState(
 	selectedIds: Set<string>,
 	judgeId: string | undefined,
 	mode: FusionMode = "available",
-	tools: Pick<FusionSetupState, "panelTools" | "maxToolCalls" | "toolsConsented" | "footerDisplay"> = {},
+	settings: Pick<FusionSetupState, "panelTools" | "maxToolCalls" | "toolsConsented" | "footerDisplay" | "panelReasoning" | "judgeReasoning"> = {},
 ) {
 	pi.appendEntry("fusion-state", {
 		selectedIds: Array.from(selectedIds),
 		judgeId,
 		enabled: mode === "forced",
 		mode,
-		panelTools: tools.panelTools,
-		maxToolCalls: tools.maxToolCalls,
-		toolsConsented: tools.toolsConsented,
-		footerDisplay: tools.footerDisplay,
+		panelTools: settings.panelTools,
+		maxToolCalls: settings.maxToolCalls,
+		toolsConsented: settings.toolsConsented,
+		footerDisplay: settings.footerDisplay,
+		panelReasoning: settings.panelReasoning,
+		judgeReasoning: settings.judgeReasoning,
 		timestamp: Date.now(),
 	});
 }
@@ -293,6 +223,8 @@ function restoreSessionState(ctx: ExtensionContext): FusionSetupState | undefine
 				maxToolCalls?: number;
 				toolsConsented?: boolean;
 				footerDisplay?: FooterDisplay;
+				panelReasoning?: ThinkingLevel;
+				judgeReasoning?: ThinkingLevel;
 			};
 			const mode = normalizeMode(data);
 			return {
@@ -303,7 +235,11 @@ function restoreSessionState(ctx: ExtensionContext): FusionSetupState | undefine
 				panelTools: data.panelTools,
 				maxToolCalls: data.maxToolCalls,
 				toolsConsented: data.toolsConsented,
-				footerDisplay: normalizeFooterDisplay(data.footerDisplay),
+				footerDisplay: data.footerDisplay === undefined
+					? undefined
+					: normalizeFooterDisplay(data.footerDisplay),
+				panelReasoning: data.panelReasoning,
+				judgeReasoning: data.judgeReasoning,
 			};
 		}
 	}
@@ -319,14 +255,18 @@ function effectiveDisplayState(ctx: ExtensionContext): FusionSetupState | undefi
 	const session = restoreSessionState(ctx);
 	if (session?.selectedIds.size || normalizeMode(session) === "off") return session;
 	const cfg = loadConfig(ctx.cwd, ctx.isProjectTrusted());
-	if ((cfg.panel && cfg.panel.length > 0) || cfg.judge) {
+	const effective = resolveEffectiveConfig(cfg);
+	if (effective.ok && ((effective.config.panel && effective.config.panel.length > 0) || effective.config.judge)) {
 		return {
-			selectedIds: new Set(cfg.panel ?? []),
-			judgeId: cfg.judge,
+			selectedIds: new Set(effective.config.panel ?? []),
+			judgeId: effective.config.judge,
+			profileName: effective.profileName,
+			panelReasoning: effective.config.panelReasoning,
+			judgeReasoning: effective.config.judgeReasoning,
 			mode: "available",
-			panelTools: typeof cfg.panelTools === "string" ? cfg.panelTools : undefined,
-			maxToolCalls: cfg.maxToolCalls,
-			footerDisplay: normalizeFooterDisplay(cfg.footerDisplay),
+			panelTools: typeof effective.config.panelTools === "string" ? effective.config.panelTools : undefined,
+			maxToolCalls: effective.config.maxToolCalls,
+			footerDisplay: normalizeFooterDisplay(effective.config.footerDisplay),
 		};
 	}
 	return session;
@@ -340,6 +280,8 @@ function sessionFusionOptions(ctx: ExtensionContext): FusionOptions {
 		panel_tools:
 			sessionState?.panelTools && sessionState.panelTools !== "none" ? sessionState.panelTools : undefined,
 		max_tool_calls: sessionState?.maxToolCalls,
+		panel_reasoning: sessionState?.panelReasoning,
+		judge_reasoning: sessionState?.judgeReasoning,
 	};
 	if (!sessionState?.selectedIds.size) return tools;
 	return {
@@ -371,12 +313,22 @@ export function buildInitialState(
 	resolvedJudge: ModelWithDisplay,
 	configPanelTools?: FusionConfig["panelTools"],
 	configFooterDisplay?: FusionConfig["footerDisplay"],
+	setup: {
+		profiles?: Record<string, FusionSetupProfile>;
+		profileName?: string;
+		panelReasoning?: ThinkingLevel;
+		judgeReasoning?: ThinkingLevel;
+	} = {},
 ): FusionSetupState {
 	const sessionState = restoreSessionState(ctx);
 	const configTools = typeof configPanelTools === "string" ? configPanelTools : undefined;
 	return {
 		selectedIds: sessionState?.selectedIds ?? new Set(resolvedPanel.map((m) => m.display)),
 		judgeId: sessionState?.judgeId ?? resolvedJudge.display,
+		profileName: sessionState ? undefined : setup.profileName,
+		profiles: setup.profiles,
+		panelReasoning: sessionState?.panelReasoning ?? setup.panelReasoning,
+		judgeReasoning: sessionState?.judgeReasoning ?? setup.judgeReasoning,
 		enabled: normalizeMode(sessionState) === "forced",
 		mode: normalizeMode(sessionState),
 		panelTools: sessionState?.panelTools && sessionState.panelTools !== "none"
@@ -420,19 +372,23 @@ async function applySetup(
 
 	const mode = normalizeMode(state);
 	persistSessionState(pi, state.selectedIds, state.judgeId, mode, state);
-	updateStatus(pi, ctx, state.selectedIds, state.judgeId, mode);
+	updateStatus(ctx, state.selectedIds, state.judgeId, mode);
 	const panelNames = Array.from(state.selectedIds).join(", ");
+	const profileNote = state.profileName ? `\nNamed panel: ${state.profileName}` : "";
+	const reasoningNote = `\nPanel reasoning: ${state.panelReasoning ?? "off"}\nJudge reasoning: ${state.judgeReasoning ?? "off"}`;
 	const toolsNote = state.panelTools && state.panelTools !== "none"
 		? `\nTools: ${selectionLabel(state.panelTools)} (max ${clampMaxToolCalls(state.maxToolCalls)})`
 		: "";
 	ctx.ui.notify(
-		`Panel: ${panelNames}\nJudge: ${state.judgeId}${toolsNote}${warnings.length ? "\nWarnings: " + warnings.join("; ") : ""}`,
+		`Panel: ${panelNames}\nJudge: ${state.judgeId}${profileNote}${reasoningNote}${toolsNote}${warnings.length ? "\nWarnings: " + warnings.join("; ") : ""}`,
 		"info",
 	);
 	return true;
 }
 
 export default function (pi: ExtensionAPI) {
+	let pendingPanel: PendingPanelSelection | undefined;
+
 	pi.registerTool({
 		name: "fusion",
 		label: "Fusion",
@@ -448,10 +404,12 @@ export default function (pi: ExtensionAPI) {
 			"Do not use the fusion tool for simple tactical prompts, straightforward edits, routine file operations, or questions a single model can answer well.",
 			"Panel and judge calls do not automatically see the full conversation thread. If prior context matters, either include the relevant details in the prompt argument or set context_mode to 'recent' with an appropriate context_turns value.",
 			"Use context_mode='recent' only when needed; keep context_turns small and focused because each panel model receives that context.",
-			"The fusion tool accepts a prompt and optional model overrides; it does not need file paths unless the prompt itself references them.",
+			"The fusion tool accepts only prompt and conversation-context controls; panel, judge, reasoning, tools, and budgets remain user-owned configuration.",
 		],
 		parameters: FusionParams,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const consumed = consumePendingPanel(pendingPanel, ctx.sessionManager.getSessionId());
+			pendingPanel = consumed.pending;
 			const sessionState = restoreSessionState(ctx);
 			if (normalizeMode(sessionState) === "off") {
 				return {
@@ -469,10 +427,13 @@ export default function (pi: ExtensionAPI) {
 			// The invoking model cannot set or override any of it; it controls only the prompt
 			// and the conversation-context options above.
 			const options: FusionOptions = {
+				panel_profile: consumed.panelName,
 				analysis_models: sessionOptions.analysis_models,
 				model: sessionOptions.model,
 				panel_tools: sessionOptions.panel_tools,
 				max_tool_calls: sessionOptions.max_tool_calls,
+				panel_reasoning: sessionOptions.panel_reasoning,
+				judge_reasoning: sessionOptions.judge_reasoning,
 				context_text: contextText,
 			};
 			return runFusion(
@@ -490,6 +451,16 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	async function validateNamedPanel(name: string, ctx: ExtensionContext): Promise<string | undefined> {
+		const selection = await resolveFusionSelection(
+			loadConfig(ctx.cwd, ctx.isProjectTrusted()),
+			ctx.modelRegistry,
+			ctx.model,
+			{ panel_profile: name },
+		);
+		return selection.ok ? undefined : selection.result.details.error ?? `Named panel "${name}" is unavailable.`;
+	}
+
 	pi.registerCommand("fusion", {
 		description: "Set fusion mode: /fusion on | available | off (no arg toggles available/forced; /fusion <prompt> forces once)",
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
@@ -502,7 +473,13 @@ export default function (pi: ExtensionAPI) {
 			return filtered.length > 0 ? filtered : null;
 		},
 		handler: async (args, ctx) => {
-			const prompt = args.trim();
+			const parsed = parsePanelCommand(args);
+			if (!parsed.ok) {
+				if (ctx.mode === "print") console.log(parsed.error);
+				else ctx.ui.notify(parsed.error, "warning");
+				return;
+			}
+			const prompt = parsed.prompt;
 			const sessionState = restoreSessionState(ctx);
 			const lower = prompt.toLowerCase();
 			const modeCommand: FusionMode | undefined =
@@ -515,6 +492,7 @@ export default function (pi: ExtensionAPI) {
 							: undefined;
 
 			if (!prompt || modeCommand) {
+				pendingPanel = undefined;
 				if (!sessionState?.selectedIds.size && (modeCommand === "forced" || (!prompt && !modeCommand))) {
 					const message = "No fusion setup yet. Run /fusion-setup first, or use /fusion off to disable.";
 					if (ctx.mode === "print") console.log(message);
@@ -527,7 +505,7 @@ export default function (pi: ExtensionAPI) {
 				const currentMode = normalizeMode(sessionState);
 				const nextMode = modeCommand ?? (currentMode === "forced" ? "available" : "forced");
 				persistSessionState(pi, selectedIds, judgeId, nextMode, sessionState ?? {});
-				updateStatus(pi, ctx, selectedIds, judgeId, nextMode);
+				updateStatus(ctx, selectedIds, judgeId, nextMode);
 				const footerDisplay = effectiveFooterDisplay(ctx);
 				const summaryBase = fusionFooterText(selectedIds, judgeId, nextMode, footerDisplay) ?? modeLabel(nextMode);
 				const summary = footerDisplay === "full" ? summaryBase + toolsSuffix(sessionState) : summaryBase;
@@ -543,8 +521,24 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			if (parsed.panelName) {
+				if (ctx.mode === "print") {
+					console.log("/fusion --panel requires interactive mode. Use /fusion-report --panel <name> <prompt> in print mode.");
+					return;
+				}
+				const error = await validateNamedPanel(parsed.panelName, ctx);
+				if (error) {
+					ctx.ui.notify(error, "error");
+					return;
+				}
+				pendingPanel = armPendingPanel(parsed.panelName, ctx.sessionManager.getSessionId());
+				ctx.ui.notify(`Named panel "${parsed.panelName}" armed for this Fusion run.`, "info");
+			} else {
+				pendingPanel = undefined;
+			}
+
 			if (sessionState?.selectedIds.size) {
-				updateStatus(pi, ctx, sessionState.selectedIds, sessionState.judgeId, normalizeMode(sessionState));
+				updateStatus(ctx, sessionState.selectedIds, sessionState.judgeId, normalizeMode(sessionState));
 			}
 
 			if (ctx.mode === "print") {
@@ -559,17 +553,24 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("fusion-report", {
 		description: "Run fusion directly and write the raw panel/judge diagnostic report into the editor",
 		handler: async (args, ctx) => {
-			const prompt = args.trim();
+			const parsed = parsePanelCommand(args);
+			if (!parsed.ok) {
+				if (ctx.mode === "print") console.log(parsed.error);
+				else ctx.ui.notify(parsed.error, "warning");
+				return;
+			}
+			const prompt = parsed.prompt;
 			if (!prompt) {
-				const usage = "Usage: /fusion-report <prompt>";
+				const usage = "Usage: /fusion-report [--panel <name>] <prompt>";
 				if (ctx.mode === "print") console.log(usage);
 				else ctx.ui.notify(usage, "warning");
 				return;
 			}
 
 			const sessionState = restoreSessionState(ctx);
-			if (sessionState?.selectedIds.size) updateStatus(pi, ctx, sessionState.selectedIds, sessionState.judgeId, normalizeMode(sessionState));
+			if (sessionState?.selectedIds.size) updateStatus(ctx, sessionState.selectedIds, sessionState.judgeId, normalizeMode(sessionState));
 			const overrides = sessionFusionOptions(ctx);
+			if (parsed.panelName) overrides.panel_profile = parsed.panelName;
 
 			ctx.ui.setWorkingMessage("Running fusion report...");
 			try {
@@ -584,6 +585,12 @@ export default function (pi: ExtensionAPI) {
 					sessionState?.toolsConsented ?? false,
 					ctx.signal,
 				);
+				if (result.details.status === "error") {
+					const error = result.details.error ?? "Fusion report failed.";
+					if (ctx.mode === "print") console.log(error);
+					else ctx.ui.notify(error, "error");
+					return;
+				}
 				const failed = (result.details.failed_models ?? []).map((f) => ({
 					model: f.model,
 					provider: f.model.split("/")[0] ?? "",
@@ -627,14 +634,38 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			const config = loadConfig(ctx.cwd, ctx.isProjectTrusted());
-
-			const { panel, judge, warnings } = await resolveFusionModels(
-				ctx.cwd,
+			const selection = await resolveFusionSelection(
+				config,
 				ctx.modelRegistry,
 				ctx.model,
-				ctx.isProjectTrusted(),
 				{},
 			);
+			if (!selection.ok) {
+				ctx.ui.notify(selection.result.details.error ?? "Fusion setup could not resolve models.", "error");
+				return;
+			}
+			const { panel, judge, warnings } = selection.resolution;
+			const profiles: Record<string, FusionSetupProfile> = {};
+			const profileNames = Object.keys(config.panels ?? {}).sort();
+			const resolvedProfiles = await Promise.all(
+				profileNames.map((name) => resolveFusionSelection(
+					config,
+					ctx.modelRegistry,
+					ctx.model,
+					{ panel_profile: name },
+				)),
+			);
+			for (let i = 0; i < profileNames.length; i++) {
+				const name = profileNames[i];
+				const profile = resolvedProfiles[i];
+				if (!profile.ok) continue;
+				profiles[name] = {
+					selectedIds: profile.resolution.panel.map(modelDisplay),
+					judgeId: modelDisplay(profile.resolution.judge),
+					panelReasoning: profile.config.panelReasoning,
+					judgeReasoning: profile.config.judgeReasoning,
+				};
+			}
 
 			const initial: FusionSetupState = buildInitialState(
 				ctx,
@@ -642,6 +673,12 @@ export default function (pi: ExtensionAPI) {
 				{ display: modelDisplay(judge) },
 				config.panelTools,
 				config.footerDisplay,
+				{
+					profiles,
+					profileName: selection.resolution.profileName,
+					panelReasoning: selection.config.panelReasoning,
+					judgeReasoning: selection.config.judgeReasoning,
+				},
 			);
 
 			const state = await selectFusionSetup(ctx, available, initial);
@@ -719,14 +756,17 @@ export default function (pi: ExtensionAPI) {
 			} else {
 				const mode = normalizeMode(state);
 				lines.push(`Mode: ${mode}`);
+				if (state.profileName) lines.push(`Named panel: ${state.profileName}`);
 				lines.push(`Panel: ${Array.from(state.selectedIds).join(", ")}${fromConfig ? "  (from fusion.json)" : ""}`);
 				lines.push(`Judge: ${state.judgeId ?? Array.from(state.selectedIds)[0]}`);
+				lines.push(`Panel reasoning: ${state.panelReasoning ?? "off"}`);
+				lines.push(`Judge reasoning: ${state.judgeReasoning ?? "off"}`);
 				lines.push(toolsStatusLine(state));
 				lines.push(footerStatusLine(footerDisplay));
 				lines.push("");
 				lines.push("Use /fusion to toggle available/forced, /fusion off to disable, /fusion <prompt> to force once. Change panel tools with /fusion-setup.");
-				updateStatus(pi, ctx, state.selectedIds, state.judgeId, mode);
 			}
+			updateStatus(ctx, state?.selectedIds ?? new Set(), state?.judgeId, normalizeMode(state));
 			const text = lines.join("\n");
 			if (ctx.mode === "print") console.log(text);
 			else ctx.ui.notify(text, "info");
@@ -747,19 +787,37 @@ export default function (pi: ExtensionAPI) {
 		if (isFusionPrompt(event.text.trim())) return { action: "continue" };
 		const state = restoreSessionState(ctx);
 		if (normalizeMode(state) !== "forced" || !state?.selectedIds.size) return { action: "continue" };
-		updateStatus(pi, ctx, state.selectedIds, state.judgeId, "forced");
+		updateStatus(ctx, state.selectedIds, state.judgeId, "forced");
 		return { action: "transform", text: forceFusionPrompt(event.text), images: event.images };
 	});
 
-	// Refresh the footer whenever the session/model changes (pi.on is overloaded per
+	pi.on("agent_start", async (_event, ctx) => {
+		pendingPanel = activatePendingPanel(pendingPanel, ctx.sessionManager.getSessionId());
+	});
+	pi.on("agent_end", async (_event, ctx) => {
+		const sessionId = ctx.sessionManager.getSessionId();
+		if (pendingPanel?.sessionId === sessionId && pendingPanel.agentActive && ctx.mode !== "print") {
+			ctx.ui.notify(`Named panel "${pendingPanel.panelName}" was not used because the agent did not call Fusion.`, "warning");
+		}
+		pendingPanel = clearPendingPanel(pendingPanel, sessionId);
+	});
+	pi.on("session_shutdown", async () => {
+		pendingPanel = undefined;
+	});
+
+	// Refresh Fusion's keyed status whenever the session/model changes (pi.on is overloaded per
 	// event name, so register the shared handler for each rather than looping).
 	const refreshFooter = (ctx: ExtensionContext) => {
 		const state = effectiveDisplayState(ctx);
-		if (state && (state.selectedIds.size || normalizeMode(state) === "off")) {
-			updateStatus(pi, ctx, state.selectedIds, state.judgeId, normalizeMode(state));
-		}
+		updateStatus(ctx, state?.selectedIds ?? new Set(), state?.judgeId, normalizeMode(state));
 	};
-	pi.on("session_start", async (_event, ctx) => refreshFooter(ctx));
-	pi.on("session_tree", async (_event, ctx) => refreshFooter(ctx));
+	pi.on("session_start", async (_event, ctx) => {
+		pendingPanel = undefined;
+		refreshFooter(ctx);
+	});
+	pi.on("session_tree", async (_event, ctx) => {
+		pendingPanel = undefined;
+		refreshFooter(ctx);
+	});
 	pi.on("model_select", async (_event, ctx) => refreshFooter(ctx));
 }

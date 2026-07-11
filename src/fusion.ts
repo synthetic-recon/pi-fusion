@@ -5,14 +5,25 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
-	applyDefaults,
 	loadConfig,
 	PANEL_CONCURRENCY,
+	resolveEffectiveConfig,
 	type ResolvedFusionConfig,
 } from "./config.ts";
 import { buildFusionTaskText } from "./context.ts";
-import { callModelText, callModelWithTools, getTextContent } from "./llm.ts";
-import { modelDisplay, type ResolveOptions, resolvePanelAndJudge, type ResolveResult } from "./models.ts";
+import {
+	callModelText,
+	callModelWithTools,
+	getTextContent,
+	resolveModelReasoning,
+} from "./llm.ts";
+import {
+	modelDisplay,
+	PanelSelectionError,
+	type ResolveCandidate,
+	resolvePanelAndJudge,
+	type ResolveResult,
+} from "./models.ts";
 import { JUDGE_SYSTEM_PROMPT, PANEL_SYSTEM_PROMPT, PANEL_SYSTEM_PROMPT_WITH_TOOLS, truncateForJudge } from "./prompts.ts";
 import {
 	clampMaxToolCalls,
@@ -23,7 +34,17 @@ import {
 	selectionToNames,
 } from "./tools.ts";
 import { extractJson, mapWithConcurrencyLimit } from "./utils.ts";
-import type { FusionAnalysis, FusionDetails, FusionOptions, FusionResult, PanelResult, PanelToolUsage, ToolSelection } from "./types.ts";
+import type {
+	FusionAnalysis,
+	FusionConfig,
+	FusionDetails,
+	FusionOptions,
+	FusionResult,
+	PanelResult,
+	PanelToolUsage,
+	ThinkingLevel,
+	ToolSelection,
+} from "./types.ts";
 
 /**
  * Classify a panel's final text. Blank output (a model that gathered tools but never
@@ -35,20 +56,135 @@ export function emptyPanelError(content: string, capped: boolean): string | unde
 	return capped ? "no text answer (tool-call budget or loop guard hit)" : "empty response";
 }
 
-/** Build the panel/judge resolution options shared by resolveFusionModels and runFusion. */
-function buildResolveOptions(
-	config: ResolvedFusionConfig,
-	overrides: FusionOptions,
+export interface PanelReasoningPlan {
+	requested?: ThinkingLevel;
+	effective: Record<string, ThinkingLevel | null>;
+	warnings: string[];
+}
+
+/** Resolve all panel support before concurrency so warnings and diagnostics are stable. */
+export function resolvePanelReasoning(
+	panel: Model<Api>[],
+	requested: ThinkingLevel | undefined,
+): PanelReasoningPlan {
+	const effective: Record<string, ThinkingLevel | null> = {};
+	const warnings: string[] = [];
+	for (const model of panel) {
+		const name = modelDisplay(model);
+		const resolution = resolveModelReasoning(model, requested);
+		effective[name] = resolution.effective ?? null;
+		if (resolution.warning) warnings.push(resolution.warning);
+	}
+	return { requested, effective, warnings };
+}
+
+export type FusionSelectionResult =
+	| { ok: true; config: ResolvedFusionConfig; resolution: ResolveResult }
+	| { ok: false; result: FusionResult };
+
+/**
+ * Shared config -> candidate -> auth resolution boundary for previews and execution.
+ * Named one-shot selection is internal extension state, not a registered tool input.
+ */
+export async function resolveFusionSelection(
+	rawConfig: FusionConfig,
+	registry: ModelRegistry,
 	currentModel: Model<Api> | undefined,
-): ResolveOptions {
-	return {
-		sessionPanel: overrides.analysis_models,
-		sessionJudge: overrides.model ?? overrides.judge_model,
-		configPanel: config.panel,
-		configJudge: config.judge,
-		configMaxPanelModels: config.maxPanelModels,
-		currentModel,
+	overrides: FusionOptions,
+): Promise<FusionSelectionResult> {
+	const explicitProfile = overrides.panel_profile;
+	// A one-shot named panel owns its model, judge, and reasoning snapshot. Keep
+	// shared runtime overrides, but do not let a previously saved session profile's
+	// reasoning leak into the explicit selection.
+	const effectiveOverrides = explicitProfile
+		? { ...overrides, panel_reasoning: undefined, judge_reasoning: undefined }
+		: overrides;
+	const effective = resolveEffectiveConfig(rawConfig, effectiveOverrides, explicitProfile);
+	if (!effective.ok) {
+		return selectionFailure(effective.error.message, effective.error.panelName, effective.warnings);
+	}
+
+	// Only a valid named default needs a separately normalized legacy fallback.
+	// Explicit profiles fail closed, and legacy selections can reuse their result.
+	let legacyResult: ReturnType<typeof resolveEffectiveConfig> = effective;
+	if (effective.source === "default") {
+		const legacyRaw = { ...rawConfig };
+		delete legacyRaw.defaultPanel;
+		legacyResult = resolveEffectiveConfig(legacyRaw, overrides);
+	}
+	if (!legacyResult.ok) {
+		return selectionFailure(legacyResult.error.message, legacyResult.error.panelName, legacyResult.warnings);
+	}
+	const legacy = legacyResult;
+
+	const candidates: ResolveCandidate[] = [];
+	if (explicitProfile) {
+		candidates.push({
+			source: "explicit",
+			profileName: effective.profileName,
+			panel: effective.config.panel ?? [],
+			judge: effective.config.judge,
+			maxPanelModels: effective.config.maxPanelModels,
+			strict: true,
+		});
+	} else {
+		if (overrides.analysis_models?.length) {
+			candidates.push({
+				source: "session",
+				panel: overrides.analysis_models,
+				judge: overrides.model ?? overrides.judge_model,
+				maxPanelModels: 8,
+			});
+		}
+		if (effective.source === "default") {
+			candidates.push({
+				source: "default",
+				profileName: effective.profileName,
+				panel: effective.config.panel ?? [],
+				judge: effective.config.judge,
+				maxPanelModels: effective.config.maxPanelModels,
+			});
+		}
+		if (legacy.config.panel?.length) {
+			candidates.push({
+				source: "legacy",
+				panel: legacy.config.panel,
+				judge: legacy.config.judge,
+				maxPanelModels: legacy.config.maxPanelModels,
+			});
+		}
+	}
+
+	try {
+		const resolution = await resolvePanelAndJudge(registry, {
+			candidates,
+			autoJudge: legacy.config.judge,
+			autoMaxPanelModels: legacy.config.maxPanelModels,
+			currentModel,
+			warnings: effective.warnings,
+		});
+		const config = resolution.source === "explicit" || resolution.source === "default"
+			? effective.config
+			: legacy.config;
+		return { ok: true, config, resolution };
+	} catch (error) {
+		if (error instanceof PanelSelectionError) {
+			return selectionFailure(error.message, error.profileName, error.warnings);
+		}
+		throw error;
+	}
+}
+
+function selectionFailure(message: string, profileName: string | undefined, warnings: string[]): FusionSelectionResult {
+	const details: FusionDetails = {
+		status: "error",
+		responses: [],
+		...(profileName ? { panel_profile: profileName } : {}),
+		...(warnings.length ? { warnings } : {}),
+		error: message,
+		failure_reason: "unexpected_error",
 	};
+	return { ok: false, result: { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details } };
 }
 
 export async function resolveFusionModels(
@@ -58,8 +194,9 @@ export async function resolveFusionModels(
 	projectTrusted: boolean,
 	overrides: FusionOptions,
 ): Promise<ResolveResult> {
-	const config = applyDefaults(loadConfig(cwd, projectTrusted), overrides);
-	return resolvePanelAndJudge(registry, buildResolveOptions(config, overrides, currentModel));
+	const selection = await resolveFusionSelection(loadConfig(cwd, projectTrusted), registry, currentModel, overrides);
+	if (!selection.ok) throw new Error(selection.result.details.error ?? "Fusion model selection failed");
+	return selection.resolution;
 }
 
 export async function runFusion(
@@ -74,17 +211,27 @@ export async function runFusion(
 	signal: AbortSignal | undefined,
 	onUpdate?: (partial: { content: Array<{ type: "text"; text: string }>; details: unknown }) => void,
 ): Promise<FusionResult> {
-	const config = applyDefaults(loadConfig(cwd, projectTrusted), overrides);
+	const selection = await resolveFusionSelection(loadConfig(cwd, projectTrusted), registry, currentModel, overrides);
+	if (!selection.ok) return selection.result;
+	const { config, resolution } = selection;
 
 	const maxPanelOutputTokens = config.maxPanelOutputTokens;
 	const maxCompletionTokens = config.maxCompletionTokens;
 	const temperature = config.temperature;
 	const taskText = buildFusionTaskText(prompt, overrides.context_text);
 
-	const { panel, judge, warnings } = await resolvePanelAndJudge(
-		registry,
-		buildResolveOptions(config, overrides, currentModel),
-	);
+	const { panel, judge, warnings, profileName, source } = resolution;
+	const requestedPanelReasoning = source === "session"
+		? overrides.panel_reasoning ?? config.panelReasoning
+		: config.panelReasoning;
+	const requestedJudgeReasoning = source === "session"
+		? overrides.judge_reasoning ?? config.judgeReasoning
+		: config.judgeReasoning;
+	const panelReasoning = resolvePanelReasoning(panel, requestedPanelReasoning);
+	warnings.push(...panelReasoning.warnings);
+	const panelReasoningDetails = panelReasoning.requested
+		? { requested: panelReasoning.requested, effective: panelReasoning.effective }
+		: undefined;
 
 	// Resolve panel tools. Fail-closed: mutating tools without consent are stripped
 	// to the read-only subset. Mutating runs serialize the panel (concurrency 1).
@@ -106,20 +253,25 @@ export async function runFusion(
 	const panelModelNames = panel.map(modelDisplay);
 	const judgeName = modelDisplay(judge);
 	const toolsLabel = toolsEnabled ? ` | tools: ${selectionLabel(toolSelection)}·${maxToolCalls}${mutating ? " (serialized)" : ""}` : "";
+	const panelReasoningLabel = panelReasoningDetails
+		? ` | panel reasoning: ${panelReasoningDetails.requested} (${Object.entries(panelReasoningDetails.effective).map(([name, level]) => `${name}=${level ?? "off"}`).join(", ")})`
+		: "";
+	const judgeReasoningLabel = requestedJudgeReasoning ? ` | judge reasoning requested: ${requestedJudgeReasoning}` : "";
 
 	onUpdate?.({
 		content: [
 			{
 				type: "text",
-				text: `Fusion panel: ${panelModelNames.join(", ")} | judge: ${judgeName}${toolsLabel}${warnings.length > 0 ? " | warnings: " + warnings.join("; ") : ""}`,
+				text: `Fusion panel: ${panelModelNames.join(", ")} | judge: ${judgeName}${profileName ? ` | named panel: ${profileName}` : ""}${panelReasoningLabel}${judgeReasoningLabel}${toolsLabel}${warnings.length > 0 ? " | warnings: " + warnings.join("; ") : ""}`,
 			},
 		],
-		details: { phase: "resolving" },
+		details: { phase: "resolving", panel_profile: profileName, panel_reasoning: panelReasoningDetails },
 	});
 
 	// Run panel (serialized when mutating tools are active).
 	const rawPanelResults = await mapWithConcurrencyLimit(panel, panelConcurrency, async (model): Promise<PanelResult> => {
 		const base = { model: modelDisplay(model), provider: model.provider, id: model.id };
+		const effectiveReasoning = panelReasoning.effective[base.model] ?? undefined;
 		try {
 			let content: string;
 			let tools: PanelToolUsage | undefined;
@@ -135,11 +287,13 @@ export async function runFusion(
 					toolDefs,
 					maxToolCalls,
 					ctx,
+					undefined,
+					effectiveReasoning,
 				);
 				content = getTextContent(result.message);
 				tools = { turns: result.turns, tool_calls: result.toolCalls, capped: result.cappedOut };
 			} else {
-				const response = await callModelText(registry, model, PANEL_SYSTEM_PROMPT, taskText, maxPanelOutputTokens, temperature, signal);
+				const response = await callModelText(registry, model, PANEL_SYSTEM_PROMPT, taskText, maxPanelOutputTokens, temperature, signal, effectiveReasoning);
 				content = getTextContent(response);
 			}
 			// Empty output is a failure, not a blank "success" — keep it out of the judge.
@@ -161,6 +315,8 @@ export async function runFusion(
 			failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error", ...(f.tools ? { tools: f.tools } : {}) })),
 			panel_models: panelModelNames,
 			judge_model: judgeName,
+			...(profileName ? { panel_profile: profileName } : {}),
+			...(panelReasoningDetails ? { panel_reasoning: panelReasoningDetails } : {}),
 			...(warnings.length > 0 ? { warnings } : {}),
 			error: "all panel models failed",
 			failure_reason: classifyAllPanelFailure(failed),
@@ -178,11 +334,20 @@ export async function runFusion(
 						: `Panel complete (${successful.length}/${panel.length}). Running judge...`,
 			},
 		],
-		details: { phase: successful.length === 1 ? "single_response" : "judging" },
+		details: { phase: successful.length === 1 ? "single_response" : "judging", panel_reasoning: panelReasoningDetails },
 	});
 
 	let analysis: FusionAnalysis | undefined;
+	let judgeReasoningDetails: FusionDetails["judge_reasoning"];
 	if (successful.length >= 2) {
+		const judgeReasoning = resolveModelReasoning(judge, requestedJudgeReasoning);
+		if (judgeReasoning.warning) warnings.push(judgeReasoning.warning);
+		if (judgeReasoning.requested) {
+			judgeReasoningDetails = {
+				requested: judgeReasoning.requested,
+				effective: judgeReasoning.effective ?? null,
+			};
+		}
 		// Run judge.
 		const judgeBudgetPerResponse = Math.max(
 			1024,
@@ -206,6 +371,7 @@ export async function runFusion(
 				maxCompletionTokens,
 				temperature,
 				signal,
+				judgeReasoning.effective,
 			);
 			const judgeText = getTextContent(judgeResponse);
 			analysis = extractJson<FusionAnalysis>(judgeText);
@@ -224,6 +390,9 @@ export async function runFusion(
 			: {}),
 		panel_models: panelModelNames,
 		judge_model: judgeName,
+		...(profileName ? { panel_profile: profileName } : {}),
+		...(panelReasoningDetails ? { panel_reasoning: panelReasoningDetails } : {}),
+		...(judgeReasoningDetails ? { judge_reasoning: judgeReasoningDetails } : {}),
 		...(toolsEnabled
 			? { panel_tools: { mode: selectionLabel(toolSelection), max_tool_calls: maxToolCalls, serialized: mutating } }
 			: {}),
@@ -243,4 +412,3 @@ function classifyAllPanelFailure(failed: PanelResult[]): FusionDetails["failure_
 	}
 	return "all_panels_failed";
 }
-

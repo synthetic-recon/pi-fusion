@@ -2,7 +2,14 @@
  * Tests for pi-fusion setup picker selection helpers (independent panel + judge).
  */
 
-import { modelBadges, togglePanelMember, toggleJudgeSelection } from "../ui.ts";
+import {
+	applySetupProfile,
+	markSetupCustom,
+	modelBadges,
+	togglePanelMember,
+	toggleJudgeSelection,
+} from "../ui.ts";
+import type { FusionSetupState } from "../ui.ts";
 import { eq, test } from "./_harness.ts";
 
 test("togglePanelMember adds and removes", () => {
@@ -48,4 +55,38 @@ test("modelBadges reflects panel/judge state (right-column format)", () => {
 	eq(modelBadges(true, false), "● panel", "panel only");
 	eq(modelBadges(false, true), "◆ judge", "judge only");
 	eq(modelBadges(true, true), "● panel  ◆ judge", "both");
+});
+
+test("applySetupProfile copies a frozen model, judge, and reasoning snapshot", () => {
+	const state: FusionSetupState = {
+		selectedIds: new Set(["legacy/model"]),
+		judgeId: "legacy/judge",
+		profiles: {
+			quality: {
+				selectedIds: ["openai/gpt-5.5", "anthropic/claude-sonnet-5"],
+				judgeId: "openai/gpt-5.5",
+				panelReasoning: "high" as const,
+				judgeReasoning: "xhigh" as const,
+			},
+		},
+	};
+	applySetupProfile(state, "quality");
+	eq([...state.selectedIds], ["openai/gpt-5.5", "anthropic/claude-sonnet-5"], "models copied");
+	eq(state.judgeId, "openai/gpt-5.5", "judge copied");
+	eq(state.panelReasoning, "high", "panel reasoning copied");
+	eq(state.judgeReasoning, "xhigh", "judge reasoning copied");
+	eq(state.profileName, "quality", "profile provenance set");
+
+	state.profiles!.quality.selectedIds.push("later/config-edit");
+	eq([...state.selectedIds], ["openai/gpt-5.5", "anthropic/claude-sonnet-5"], "snapshot is frozen");
+});
+
+test("profile-owned edits mark setup custom while unrelated config can retain provenance", () => {
+	const state = {
+		selectedIds: new Set(["openai/gpt-5.5"]),
+		judgeId: "openai/gpt-5.5",
+		profileName: "quality",
+	};
+	markSetupCustom(state);
+	eq(state.profileName, undefined, "profile-owned edit clears provenance");
 });

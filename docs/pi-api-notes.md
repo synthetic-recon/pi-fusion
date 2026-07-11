@@ -29,9 +29,6 @@ intentional; each carries a matching `// pi gap:` comment at its call site.
 
 These work fine but are undocumented; relying on them is a small risk:
 - `getSelectListTheme()` (only `getSettingsListTheme` is in `docs/tui.md`).
-- `footerData.getAvailableProviderCount()` and the full `FooterData` shape (`docs/extensions.md`
-  shows only the 2-arg form).
 - `ModelRegistry.isUsingOAuth(model)` and `getAvailable()`.
 - The tool-definition factories (`createReadToolDefinition` etc.) and the `AgentToolResult` shape
   used by panel tool loops.
-- `ctx.model.reasoning`.

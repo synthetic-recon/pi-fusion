@@ -47,7 +47,7 @@ pi install /path/to/pi-fusion                       # from a local checkout
 
 After installing or updating in a running session, run `/reload`.
 
-There's no build step; pi loads the TypeScript directly via [jiti](https://github.com/unjs/jiti). Requires Node ≥ 22.19.0.
+There's no build step; pi loads the TypeScript directly via [jiti](https://github.com/unjs/jiti). Requires Node ≥ 22.19.0 and Pi ≥ 0.74.0.
 
 ## Quick start
 
@@ -93,9 +93,10 @@ Run a single prompt through fusion without changing the session mode:
 
 ```
 /fusion <prompt>
+/fusion --panel quality <prompt>
 ```
 
-The active model calls fusion, then writes the final answer itself in its normal voice.
+The active model calls fusion, then writes the final answer itself in its normal voice. `--panel <name>` selects a configured named panel for that agent run only; the next run returns to the session/default selection. This stateful `/fusion --panel` form requires interactive mode. In print mode, use `/fusion-report --panel <name> <prompt>` to run the named panel directly.
 
 ### Adding conversation context
 
@@ -120,16 +121,30 @@ Configuration is optional. To pin a panel and judge, create either:
 - `~/.pi/agent/fusion.json` (global)
 - `<cwd>/.pi/fusion.json` (project-local, overrides global; loaded only for trusted projects)
 
-Generate a project-local template with `/fusion-init`, or write one by hand:
+Generate a project-local template with `/fusion-init`, or write one by hand. Named panels let you keep reusable cost/quality trade-offs without editing the file between runs:
 
 ```json
 {
-  "panel": [
-    "openai/gpt-5.5",
-    "z-ai/glm-5.2",
-    "moonshotai/kimi-2.7"
-  ],
-  "judge": "anthropic/claude-opus-4-8",
+  "defaultPanel": "quality",
+  "panelReasoning": "medium",
+  "judgeReasoning": "high",
+  "panels": {
+    "quality": {
+      "models": [
+        "openai/gpt-5.5",
+        "z-ai/glm-5.2",
+        "moonshotai/kimi-2.7"
+      ],
+      "judge": "anthropic/claude-opus-4-8",
+      "panelReasoning": "high",
+      "judgeReasoning": "xhigh"
+    },
+    "fast": {
+      "models": ["openai/gpt-5.5-mini", "google/gemini-2.5-flash"],
+      "judge": "openai/gpt-5.5-mini",
+      "panelReasoning": "low"
+    }
+  },
   "maxPanelModels": 3,
   "maxPanelOutputTokens": 2048,
   "maxCompletionTokens": 4096,
@@ -142,8 +157,12 @@ Generate a project-local template with `/fusion-init`, or write one by hand:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `panel` | auto-diverse | Model identifiers in `provider/id` form. Only authed models are used. |
-| `judge` | current model, then first panel model | Model identifier in `provider/id` form. |
+| `panels` | none | Reusable named panels. Each entry requires `models` and may set `judge`, `panelReasoning`, and `judgeReasoning`. |
+| `defaultPanel` | none | Named panel used when there is no one-shot or session selection. An invalid default warns and falls through to legacy or auto selection. |
+| `panel` | auto-diverse | Legacy top-level model identifiers in `provider/id` form. Still supported; only authed models are used. |
+| `judge` | current model, then first panel model | Legacy/default judge model identifier in `provider/id` form. Named panels inherit it when they omit `judge`. |
+| `panelReasoning` | provider default | Reasoning effort for panel calls: `minimal`, `low`, `medium`, `high`, or `xhigh`. Named panels may override it. |
+| `judgeReasoning` | provider default | Independent reasoning effort for judge synthesis, using the same levels. Named panels may override it. |
 | `maxPanelModels` | 3 | Max panel size (1–8). |
 | `maxPanelOutputTokens` | 2048 | Max tokens per panel response. |
 | `maxCompletionTokens` | 4096 | Max tokens for the judge analysis. |
@@ -151,11 +170,13 @@ Generate a project-local template with `/fusion-init`, or write one by hand:
 | `panelTools` | `"none"` | Panel tool access: `"none"`, `"readonly"` (read/grep/find/ls), `"all"` (adds bash/edit/write), or an explicit tool-name list (e.g. `["read", "grep"]`). The list form is **config-file only**. |
 | `maxToolCalls` | 16 | Max tool-call steps **per panel model** when tools are on (1–100). Models batch several calls per turn, so this is the per-agent budget; total ≈ panel size × this. |
 | `panelToolsConsent` | `false` | Pre-authorize mutating tools in non-interactive (`-p`) runs. |
-| `footerDisplay` | `"full"` | Footer verbosity: `"full"` keeps the current mode/panel/judge/tools text, `"compact"` shows only mode + panel count, and `"off"` hides pi-fusion's footer text. |
+| `footerDisplay` | `"full"` | Fusion status verbosity: `"full"` includes mode, active named panel, panel count, reasoning, judge, and tools; `"compact"` shows mode + panel count; `"off"` clears only Fusion's keyed status. The legacy key name is retained for compatibility. |
 
-**Precedence.** Everything resolves session selection (`/fusion-setup`) → `fusion.json` → defaults/auto-selection. The invoking model can't override any of it (the tool takes only the prompt + optional context controls).
+**Precedence.** Everything resolves one-shot `--panel` selection → session snapshot (`/fusion-setup`) → `defaultPanel` → legacy top-level `panel`/`judge` → auto-selection. Project-local config replaces global config rather than merging with it. An explicit unknown, malformed, empty, or unusable named panel fails before any provider call; an invalid `defaultPanel` warns and continues through legacy/auto selection. The invoking model can't override any of this (the tool takes only the prompt + optional context controls).
 
 **How models are resolved.** Reference models as `provider/id` (e.g. `openai/gpt-5.5`); a bare `id` matches by exact id across providers. Only authed models are used; a configured model that isn't authed is skipped with a warning. With no panel configured, fusion auto-selects a diverse set spread across providers. The judge defaults to your current model, falling back to the first panel model.
+
+**Reasoning support.** Fusion asks Pi which provider-neutral reasoning levels each model supports. If a requested level is unsupported, that model runs without the requested reasoning and Fusion reports a non-fatal warning; it does not silently substitute another level. Panel reasoning is preserved across every tool-loop turn and forced finalization. Judge reasoning is used only when at least two panel models succeed and synthesis runs. Reasoning can increase latency, token use, and provider cost.
 
 ### Panel tools (multi-turn)
 
@@ -164,7 +185,9 @@ By default panel models answer in a single turn with no tools. Enable tools to l
 - **`readonly`** (`read`, `grep`, `find`, `ls`): safe; no mutation.
 - **`all`**: adds `bash`, `edit`, `write`. **Off by default** and requires consent (the `/fusion-setup` picker prompts; non-interactive runs need `"panelToolsConsent": true`). Because several models run concurrently, mutating runs **serialize the panel** so they can't clobber each other's writes. Without consent, `all` downgrades to read-only.
 
-Set tools and footer display in `/fusion-setup` (Config section) or in `fusion.json` (`panelTools`, `maxToolCalls`, `footerDisplay`). These are user configuration only — the invoking model has no tool parameters to override them.
+Set tools and Fusion status display in `/fusion-setup` (Config section) or in `fusion.json` (`panelTools`, `maxToolCalls`, `footerDisplay`). These are user configuration only — the invoking model has no tool parameters to override them.
+
+Fusion contributes status through Pi's keyed status API; it does not own or replace the footer. The built-in footer or any third-party footer extension can render Fusion alongside other extension statuses.
 
 > **Note:** enabling panel tools means **file contents (and command output for `all`) are sent to every panel model's provider**. Only enable it where that's acceptable.
 
@@ -176,7 +199,7 @@ No. By default the mode is `available`, so the active model only calls fusion wh
 
 **Does it cost more tokens / money?**
 
-Yes, when it runs. Each panel model is a separate completion, plus one judge call. This is why it's opt-in per task by default. Tune cost with `maxPanelModels`, `maxPanelOutputTokens`, and `maxCompletionTokens`.
+Yes, when it runs. Each panel model is a separate completion, plus one judge call. This is why it's opt-in per task by default. Tune cost with `maxPanelModels`, `maxPanelOutputTokens`, `maxCompletionTokens`, and the two reasoning settings. Higher reasoning effort can consume more of a provider's budget and increase latency.
 
 **Is my code or prompt sent to other providers?**
 
@@ -196,22 +219,23 @@ Only authed models are used. With no configured panel, fusion auto-selects a div
 
 **Does it work in non-interactive (`-p`) runs?**
 
-Yes. `/fusion-setup` is interactive-only, so configure the panel/judge via `fusion.json` instead. To allow mutating panel tools without an interactive prompt, set `"panelToolsConsent": true`.
+Yes. `/fusion-setup` and the stateful `/fusion --panel` form are interactive-only, so configure `defaultPanel` (or legacy panel/judge fields) in `fusion.json`. `/fusion-report --panel <name> <prompt>` works in print mode because it runs Fusion directly. To allow mutating panel tools without an interactive prompt, set `"panelToolsConsent": true`.
 
 **How do I see what the panel and judge actually said?**
 
-`/fusion-report <prompt>` runs fusion directly and writes the raw panel/judge diagnostic report into the editor.
+`/fusion-report [--panel <name>] <prompt>` runs fusion directly and writes the raw panel/judge diagnostic report into the editor.
 
 ## Commands
 
 | Command | What it does |
 |---------|--------------|
-| `/fusion-setup` | Choose the panel, judge, panel tools, and footer display in an interactive picker (interactive mode only). |
+| `/fusion-setup` | Load a named panel or customize a panel snapshot, judge, reasoning, tools, and Fusion status display (interactive mode only). |
 | `/fusion on` \| `available` \| `off` | Set the session mode (aliases: `forced`, `auto`, `disable`). |
 | `/fusion` | With no argument, toggle between `available` and `forced`. |
 | `/fusion <prompt>` | Force fusion for a single prompt, then answer normally. |
-| `/fusion-status` | Show the current mode, panel, and judge. |
-| `/fusion-report <prompt>` | Run fusion directly and write the raw panel/judge diagnostic report into the editor. |
+| `/fusion --panel <name> <prompt>` | Use a named panel for this interactive agent run only, then return to the prior selection. |
+| `/fusion-status` | Show the current mode, named panel when applicable, panel snapshot, reasoning, judge, tools, and Fusion status verbosity. |
+| `/fusion-report [--panel <name>] <prompt>` | Run fusion directly and write the raw panel/judge diagnostic report into the editor; named selection also works in print mode. |
 | `/fusion-init` | Write a `.pi/fusion.json` template (confirms before overwriting; trusted projects only). |
 
 ### `/fusion-setup` controls
@@ -219,9 +243,9 @@ Yes. `/fusion-setup` is interactive-only, so configure the panel/judge via `fusi
 Two sections, **Models** and **Config**, with the live panel/judge selection shown at the top. **Tab** switches sections; **Enter** saves, **Esc** cancels.
 
 - **Models:** `↑/↓` move · `p` toggle panel · `j` toggle judge (independent of the panel; can be any model or left unset for auto) · `c` clear panel · `/` search.
-- **Config:** `↑/↓` move · `Space` / `←→` change a value. Settings: **Panel tools** (`none` → `readonly` → `all`), **Max tool calls** (`4`/`8`/`12`/`16`/`25`/`50`/`100`), and **Footer** (`full` → `compact` → `off`).
+- **Config:** `↑/↓` move · `Space` / `←→` change a value. Settings: **Named panel** (when configured), **Panel reasoning**, **Judge reasoning**, **Panel tools** (`none` → `readonly` → `all`), **Max tool calls** (`4`/`8`/`12`/`16`/`25`/`50`/`100`), and **Fusion status** (`full` → `compact` → `off`).
 
-Selections (panel, judge, mode) are saved in the session and restored on `/resume`.
+Selections (panel, judge, reasoning, tools, status display, and mode) are saved as a detached session snapshot and restored on `/resume`. Loading a named panel copies its resolved values; the saved snapshot does not follow later config-file edits.
 
 ## Development
 
@@ -243,5 +267,5 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and 
 - Uses pi's authed models instead of OpenRouter's catalog.
 - Does not inject `openrouter:web_search` or `openrouter:web_fetch` into panel/judge calls (pi has its own tools; the outer model can still use them).
 - No recursion-depth header is needed; inner calls use `complete()` directly and never see the `fusion` tool.
-- Adds interactive panel/judge selection via `/fusion-setup`.
+- Adds named panels and interactive panel/judge/reasoning selection via `/fusion-setup`.
 - Adds session modes (`available`, `forced`, `off`), diagnostic reports (`/fusion-report`), and session-state persistence.

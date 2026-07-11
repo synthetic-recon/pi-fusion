@@ -4,6 +4,7 @@
 
 import {
 	complete,
+	getSupportedThinkingLevels,
 	type Api,
 	type AssistantMessage,
 	type Message,
@@ -11,6 +12,7 @@ import {
 	type Tool,
 	type ToolCall,
 	type ToolResultMessage,
+	type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { TOOL_OUTPUT_MAX_BYTES } from "./config.ts";
@@ -26,14 +28,37 @@ type CompleteOptions = {
 	signal?: AbortSignal;
 	maxTokens: number;
 	temperature?: number;
+	reasoning?: ThinkingLevel;
 };
 
-async function buildCompleteOptions(
+export interface ModelReasoningResolution {
+	requested?: ThinkingLevel;
+	effective?: ThinkingLevel;
+	warning?: string;
+}
+
+/** Resolve without clamping so configured cost/effort changes are never silent. */
+export function resolveModelReasoning(
+	model: Model<Api>,
+	requested: ThinkingLevel | undefined,
+): ModelReasoningResolution {
+	if (!requested) return {};
+	if (getSupportedThinkingLevels(model).includes(requested)) {
+		return { requested, effective: requested };
+	}
+	return {
+		requested,
+		warning: `Reasoning ${requested} is not supported by ${modelDisplay(model)}; running that model without requested reasoning.`,
+	};
+}
+
+export async function buildCompleteOptions(
 	registry: ModelRegistry,
 	model: Model<Api>,
 	maxTokens: number,
 	temperature: number,
 	signal: AbortSignal | undefined,
+	reasoning?: ThinkingLevel,
 ): Promise<CompleteOptions> {
 	const auth = await registry.getApiKeyAndHeaders(model);
 	if (!auth.ok || !auth.apiKey) {
@@ -49,6 +74,7 @@ async function buildCompleteOptions(
 	if (getSupportsTemperature(model)) {
 		options.temperature = temperature;
 	}
+	if (reasoning) options.reasoning = reasoning;
 	return options;
 }
 
@@ -60,8 +86,9 @@ export async function callModelText(
 	maxTokens: number,
 	temperature: number,
 	signal: AbortSignal | undefined,
+	reasoning?: ThinkingLevel,
 ): Promise<AssistantMessage> {
-	const options = await buildCompleteOptions(registry, model, maxTokens, temperature, signal);
+	const options = await buildCompleteOptions(registry, model, maxTokens, temperature, signal, reasoning);
 	return runComplete(
 		model,
 		{ systemPrompt, messages: [{ role: "user", content: userText, timestamp: Date.now() }] },
@@ -100,8 +127,9 @@ export async function callModelWithTools(
 	maxToolCalls: number,
 	ctx: ExtensionContext,
 	onToolEvent?: (ev: { name: string; turn: number; ok: boolean }) => void,
+	reasoning?: ThinkingLevel,
 ): Promise<ToolLoopResult> {
-	const options = await buildCompleteOptions(registry, model, maxTokens, temperature, signal);
+	const options = await buildCompleteOptions(registry, model, maxTokens, temperature, signal, reasoning);
 	const tools: Tool[] = toolDefs.map((d) => ({ name: d.name, description: d.description, parameters: d.parameters }));
 	const byName = new Map(toolDefs.map((d) => [d.name, d]));
 

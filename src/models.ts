@@ -54,6 +54,14 @@ export function selectDiversePanel(available: Model<Api>[], max: number): Model<
 }
 
 export interface ResolveOptions {
+	/** Ordered user/config candidates. When present, replaces the legacy session/config fields below. */
+	candidates?: ResolveCandidate[];
+	/** Judge used only when resolution reaches auto/current fallback. */
+	autoJudge?: string;
+	/** Max size for auto-diverse selection when candidates are supplied. */
+	autoMaxPanelModels?: number;
+	/** Warnings produced by config normalization before model resolution. */
+	warnings?: string[];
 	sessionPanel?: string[];
 	sessionJudge?: string;
 	configPanel?: string[];
@@ -62,10 +70,35 @@ export interface ResolveOptions {
 	currentModel?: Model<Api>;
 }
 
+export type ResolveSource = "session" | "explicit" | "default" | "legacy" | "auto" | "current";
+
+export interface ResolveCandidate {
+	source: Exclude<ResolveSource, "auto" | "current">;
+	panel: string[];
+	judge?: string;
+	maxPanelModels: number;
+	profileName?: string;
+	/** Fail closed when no candidate model is authenticated. */
+	strict?: boolean;
+}
+
 export interface ResolveResult {
 	panel: Model<Api>[];
 	judge: Model<Api>;
 	warnings: string[];
+	source: ResolveSource;
+	profileName?: string;
+}
+
+export class PanelSelectionError extends Error {
+	constructor(
+		public readonly profileName: string | undefined,
+		public readonly warnings: string[],
+		message: string,
+	) {
+		super(message);
+		this.name = "PanelSelectionError";
+	}
 }
 
 function resolvePanelIdentifiers(
@@ -97,50 +130,65 @@ export async function resolvePanelAndJudge(
 	registry: ModelRegistry,
 	options: ResolveOptions,
 ): Promise<ResolveResult> {
-	const warnings: string[] = [];
+	const warnings: string[] = [...(options.warnings ?? [])];
 	const configuredMaxPanel = Math.min(
-		options.configMaxPanelModels ?? DEFAULT_MAX_PANEL_MODELS,
+		options.autoMaxPanelModels ?? options.configMaxPanelModels ?? DEFAULT_MAX_PANEL_MODELS,
 		MAX_PANEL_MODELS_HARD_LIMIT,
 	);
-	const sessionMaxPanel = MAX_PANEL_MODELS_HARD_LIMIT;
+	const candidates = options.candidates ?? legacyResolveCandidates(options, configuredMaxPanel);
 
 	let panel: Model<Api>[] = [];
+	let selected: ResolveCandidate | undefined;
+	for (const candidate of candidates) {
+		if (candidate.panel.length === 0) continue;
+		const maxPanel = Math.min(candidate.maxPanelModels, MAX_PANEL_MODELS_HARD_LIMIT);
+		panel = resolvePanelIdentifiers(registry, candidate.panel, maxPanel, warnings);
+		if (panel.length > 0) {
+			selected = candidate;
+			break;
+		}
 
-	// 1. Session selection has highest priority.
-	if (options.sessionPanel && options.sessionPanel.length > 0) {
-		panel = resolvePanelIdentifiers(registry, options.sessionPanel, sessionMaxPanel, warnings);
-		if (panel.length === 0) {
-			warnings.push("Session panel contained no authed models; falling back to config/auto-selection.");
+		const label = candidate.profileName
+			? `Named panel "${candidate.profileName}"`
+			: candidate.source === "session"
+				? "Session panel"
+				: "Legacy panel";
+		const message = `${label} contained no authed models.`;
+		warnings.push(candidate.strict ? message : `${message} Trying the next configured candidate.`);
+		if (candidate.strict) {
+			throw new PanelSelectionError(candidate.profileName, warnings, message);
 		}
 	}
 
-	// 2. File config panel.
-	if (panel.length === 0 && options.configPanel && options.configPanel.length > 0) {
-		panel = resolvePanelIdentifiers(registry, options.configPanel, configuredMaxPanel, warnings);
-		if (panel.length === 0) {
-			warnings.push("Explicit panel contained no authed models; falling back to auto-selection.");
-		}
+	let source: ResolveSource;
+	if (selected) {
+		source = selected.source;
+	} else {
+		panel = selectDiversePanel(registry.getAvailable(), configuredMaxPanel);
+		source = "auto";
 	}
 
-	// 3. Auto-diverse selection.
-	if (panel.length === 0) {
-		const available = registry.getAvailable();
-		panel = selectDiversePanel(available, configuredMaxPanel);
-	}
-
-	// 4. Final fallback to current model.
+	// Final fallback to current model.
 	if (panel.length === 0 && options.currentModel && registry.hasConfiguredAuth(options.currentModel)) {
 		panel = [options.currentModel];
+		source = "current";
 	}
 
 	if (panel.length === 0) {
 		throw new Error("No authed models available for the fusion panel. Configure models in ~/.pi/agent/fusion.json or authenticate more providers.");
 	}
 
-	// Resolve judge: session > config > current model > first panel model.
+	// The judge belongs to the candidate that actually supplied the panel. A judge
+	// from a failed named candidate must never leak into legacy/auto fallback.
 	let judge: Model<Api> | undefined;
-
-	for (const candidateId of [options.sessionJudge, options.configJudge]) {
+	const selectedJudge = selected?.judge ?? (
+		selected?.source === "session"
+			? options.autoJudge ?? options.configJudge
+			: selected
+				? undefined
+				: options.autoJudge ?? options.configJudge
+	);
+	for (const candidateId of [selectedJudge]) {
 		if (judge || !candidateId) continue;
 		const resolved = resolveModelIdentifier(registry, candidateId);
 		if (!resolved) {
@@ -160,6 +208,33 @@ export async function resolvePanelAndJudge(
 		judge = panel[0];
 	}
 
-	return { panel, judge, warnings };
+	return {
+		panel,
+		judge,
+		warnings,
+		source,
+		...(selected?.profileName ? { profileName: selected.profileName } : {}),
+	};
 }
 
+/** Preserve the public resolver's original session -> config -> auto behavior. */
+function legacyResolveCandidates(options: ResolveOptions, configuredMaxPanel: number): ResolveCandidate[] {
+	const candidates: ResolveCandidate[] = [];
+	if (options.sessionPanel?.length) {
+		candidates.push({
+			source: "session",
+			panel: options.sessionPanel,
+			judge: options.sessionJudge,
+			maxPanelModels: MAX_PANEL_MODELS_HARD_LIMIT,
+		});
+	}
+	if (options.configPanel?.length) {
+		candidates.push({
+			source: "legacy",
+			panel: options.configPanel,
+			judge: options.configJudge,
+			maxPanelModels: configuredMaxPanel,
+		});
+	}
+	return candidates;
+}

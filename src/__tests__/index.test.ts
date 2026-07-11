@@ -1,11 +1,16 @@
 import { test, eq, fakeModel } from "./_harness.ts";
 import registerFusionExtension, {
+	activatePendingPanel,
+	armPendingPanel,
 	buildInitialState,
-	formatExtensionStatusLine,
+	clearPendingPanel,
+	consumePendingPanel,
 	fusionFooterText,
 	normalizeFooterDisplay,
+	parsePanelCommand,
 } from "../index.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { PendingPanelSelection } from "../index.ts";
 
 test("normalizeFooterDisplay accepts known footer modes", () => {
 	eq(normalizeFooterDisplay("full"), "full", "full is accepted");
@@ -18,12 +23,58 @@ test("normalizeFooterDisplay falls back to full", () => {
 	eq(normalizeFooterDisplay("bad"), "full", "invalid footer display falls back");
 });
 
+test("parsePanelCommand consumes only a leading panel option and preserves prompt text", () => {
+	eq(
+		parsePanelCommand("--panel fast explain this  exactly"),
+		{ ok: true, panelName: "fast", prompt: "explain this  exactly" },
+		"leading option parsed",
+	);
+	eq(
+		parsePanelCommand("--panel fast  preserve leading prompt space"),
+		{ ok: true, panelName: "fast", prompt: " preserve leading prompt space" },
+		"only one separator is consumed",
+	);
+	eq(
+		parsePanelCommand("explain --panel fast as text"),
+		{ ok: true, prompt: "explain --panel fast as text" },
+		"non-leading option remains prompt text",
+	);
+});
+
+test("parsePanelCommand rejects missing panel names and prompts", () => {
+	const missingName = parsePanelCommand("--panel");
+	if (missingName.ok) throw new Error("expected missing panel name failure");
+	const missingPrompt = parsePanelCommand("--panel fast");
+	if (missingPrompt.ok) throw new Error("expected missing prompt failure");
+	if (!missingName.error.includes("name")) throw new Error(`unexpected error: ${missingName.error}`);
+	if (!missingPrompt.error.includes("prompt")) throw new Error(`unexpected error: ${missingPrompt.error}`);
+});
+
+test("pending panel is session-bound, agent-bound, and consumed once", () => {
+	let pending: PendingPanelSelection | undefined = armPendingPanel("fast", "session-a");
+	eq(consumePendingPanel(pending, "session-a"), { panelName: undefined, pending }, "not consumed before agent start");
+	pending = activatePendingPanel(pending, "session-a");
+	eq(consumePendingPanel(pending, "session-b"), { panelName: undefined, pending }, "other session cannot consume");
+	eq(consumePendingPanel(pending, "session-a"), { panelName: "fast", pending: undefined }, "matching run consumes once");
+	eq(clearPendingPanel(pending, "session-b"), pending, "other session cannot clear");
+	eq(clearPendingPanel(pending, "session-a"), undefined, "matching session clears");
+});
+
 test("fusionFooterText supports full, compact, and off display modes", () => {
 	const panel = new Set(["anthropic/claude-sonnet-4-5", "openai/gpt-4.1"]);
 	eq(
 		fusionFooterText(panel, "anthropic/claude-opus-4-5", "available", "full"),
 		"Fusion available • 2 panel • judge anthropic/claude-opus-4-5",
 		"full footer includes judge",
+	);
+	eq(
+		fusionFooterText(panel, "anthropic/claude-opus-4-5", "available", "full", {
+			profileName: "quality",
+			panelReasoning: "high",
+			judgeReasoning: "xhigh",
+		}),
+		"Fusion available • named panel quality • 2 panel • panel reasoning high • judge reasoning xhigh • judge anthropic/claude-opus-4-5",
+		"full status uses the canonical profile and reasoning order",
 	);
 	eq(
 		fusionFooterText(panel, "anthropic/claude-opus-4-5", "available", "compact"),
@@ -42,25 +93,6 @@ test("fusionFooterText hides footer text when panel is empty", () => {
 	eq(fusionFooterText(new Set(), undefined, "off", "full"), "Fusion off", "off mode still reports disabled state");
 });
 
-test("formatExtensionStatusLine sorts, sanitizes, and truncates statuses", () => {
-	const statuses = new Map([
-		["z-token-speed", "\x1B[31m⚡\x1B[0m TPS\n42\tfast\x07"],
-		["a-honcho", " Honcho  ready  "],
-	]);
-	eq(
-		formatExtensionStatusLine(statuses, 80),
-		"Honcho ready ⚡ TPS 42 fast",
-		"status text is sorted by key and sanitized",
-	);
-	eq(formatExtensionStatusLine(statuses, 12), "Honcho re...", "status text truncates to footer width");
-	eq(formatExtensionStatusLine(new Map([["empty", "\n\t\x07"]]), 80), undefined, "empty sanitized statuses are omitted");
-	eq(
-		formatExtensionStatusLine(new Map([["link", "\x1B]8;;https://example.com\x07Token\x1B]8;;\x07 ready"]]), 80),
-		"Token ready",
-		"OSC hyperlinks keep visible text without leaking control payload",
-	);
-});
-
 function fakeContext(branch: unknown[] = []): ExtensionContext {
 	return {
 		sessionManager: {
@@ -69,21 +101,24 @@ function fakeContext(branch: unknown[] = []): ExtensionContext {
 	} as ExtensionContext;
 }
 
-test("registered footer refresh appends extension statuses", async () => {
-	type FooterFactory = (tui: unknown, theme: { fg: (_color: string, value: string) => string }, footerData: unknown) => { render(width: number): string[] };
+test("lifecycle refresh publishes and clears only Fusion's keyed status", async () => {
 	type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
-	let footerFactory: FooterFactory | undefined;
 	const handlers = new Map<string, EventHandler>();
-	const branch = [{
+	let branch: unknown[] = [{
 		type: "custom",
 		customType: "fusion-state",
 		data: {
 			selectedIds: ["anthropic/claude-sonnet-4-5"],
 			judgeId: "anthropic/claude-opus-4-5",
 			footerDisplay: "full",
+			profileName: "quality",
+			panelReasoning: "high",
+			judgeReasoning: "xhigh",
 		},
 	}];
+	const statuses: Array<{ key: string; text: string | undefined }> = [];
+	let footerCalls = 0;
 	const ctx = {
 		cwd: "/tmp/pi-fusion",
 		isProjectTrusted: () => false,
@@ -94,14 +129,13 @@ test("registered footer refresh appends extension statuses", async () => {
 		},
 		sessionManager: {
 			getBranch: () => branch,
-			getEntries: () => [],
-			getSessionName: () => undefined,
 		},
 		ui: {
-			setStatus: () => {},
-			setWidget: () => {},
-			setFooter: (factory: typeof footerFactory) => {
-				footerFactory = factory;
+			setStatus: (key: string, text: string | undefined) => {
+				statuses.push({ key, text });
+			},
+			setFooter: () => {
+				footerCalls++;
 			},
 		},
 	} as unknown as ExtensionContext;
@@ -118,24 +152,22 @@ test("registered footer refresh appends extension statuses", async () => {
 	const refreshFooter = handlers.get("session_start");
 	if (!refreshFooter) throw new Error("expected session_start handler to be registered");
 	await refreshFooter({}, ctx);
-	if (!footerFactory) throw new Error("expected custom footer to be installed");
-
-	const component = footerFactory(
-		{ requestRender: () => {} },
-		{ fg: (_color: string, value: string) => value },
+	eq(
+		statuses.at(-1),
 		{
-			onBranchChange: () => () => {},
-			getGitBranch: () => "feature",
-			getAvailableProviderCount: () => 1,
-			getExtensionStatuses: () => new Map([
-				["z-token-speed", "⚡ TPS 42"],
-				["a-honcho", "Honcho ready"],
-			]),
+			key: "fusion",
+			text: "Fusion available • 1 panel • panel reasoning high • judge reasoning xhigh • judge anthropic/claude-opus-4-5",
 		},
+		"session refresh publishes Fusion status",
 	);
-	const lines = component.render(120);
-	eq(lines.length, 3, "custom footer includes extension status line");
-	eq(lines[2], "Honcho ready ⚡ TPS 42", "extension status line is appended in sorted order");
+	eq(footerCalls, 0, "Fusion never replaces Pi's footer renderer");
+
+	branch = [];
+	const refreshTree = handlers.get("session_tree");
+	if (!refreshTree) throw new Error("expected session_tree handler to be registered");
+	await refreshTree({}, ctx);
+	eq(statuses.at(-1), { key: "fusion", text: undefined }, "missing state clears stale Fusion status");
+	eq(footerCalls, 0, "clearing status does not replace Pi's footer renderer");
 });
 
 test("buildInitialState seeds panel tools from config when session has no tool choice", () => {
@@ -184,4 +216,41 @@ test("buildInitialState prefers session footer display over config", () => {
 		"full",
 	);
 	eq(state.footerDisplay, "off", "session footerDisplay wins");
+});
+
+test("buildInitialState uses configured status display when an older session has no override", () => {
+	const state = buildInitialState(
+		fakeContext([{
+			type: "custom",
+			customType: "fusion-state",
+			data: {
+				selectedIds: ["anthropic/claude-sonnet-4-5"],
+			},
+		}]),
+		[{ display: "anthropic/claude-sonnet-4-5" }],
+		{ display: "anthropic/claude-opus-4-5" },
+		"none",
+		"off",
+	);
+	eq(state.footerDisplay, "off", "missing session value does not override configured status display");
+});
+
+test("buildInitialState restores reasoning as a custom session snapshot", () => {
+	const state = buildInitialState(
+		fakeContext([{
+			type: "custom",
+			customType: "fusion-state",
+			data: {
+				selectedIds: ["openai/gpt-5.5"],
+				judgeId: "openai/gpt-5.5",
+				panelReasoning: "high",
+				judgeReasoning: "xhigh",
+			},
+		}]),
+		[{ display: "legacy/model" }],
+		{ display: "legacy/judge" },
+	);
+	eq(state.profileName, undefined, "saved session is treated as a detached custom snapshot");
+	eq(state.panelReasoning, "high", "panel effort restored");
+	eq(state.judgeReasoning, "xhigh", "judge effort restored");
 });

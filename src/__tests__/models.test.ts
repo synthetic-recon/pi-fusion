@@ -2,8 +2,8 @@
  * Tests for pi-fusion model resolution and panel selection.
  */
 
-import { modelDisplay, resolvePanelAndJudge, selectDiversePanel } from "../models.ts";
-import { fakeModel, test } from "./_harness.ts";
+import { modelDisplay, PanelSelectionError, resolvePanelAndJudge, selectDiversePanel } from "../models.ts";
+import { eq, fakeModel, test } from "./_harness.ts";
 
 test("modelDisplay formats provider/id", () => {
 	const display = modelDisplay(fakeModel("anthropic", "claude-sonnet-4-5"));
@@ -80,4 +80,127 @@ test("auto panel still defaults to 3 models", async () => {
 
 	const result = await resolvePanelAndJudge(registry, {});
 	if (result.panel.length !== 3) throw new Error(`expected auto panel default 3, got ${result.panel.length}`);
+});
+
+test("partially authed named default remains the selected candidate", async () => {
+	const models = [fakeModel("named", "ready"), fakeModel("named", "locked"), fakeModel("legacy", "fallback")];
+	const registry = {
+		find(provider: string, id: string) {
+			return models.find((m) => m.provider === provider && m.id === id);
+		},
+		getAll() {
+			return models;
+		},
+		getAvailable() {
+			return models.filter((m) => m.id !== "locked");
+		},
+		hasConfiguredAuth(model: (typeof models)[number]) {
+			return model.id !== "locked";
+		},
+	} as any;
+
+	const result = await resolvePanelAndJudge(registry, {
+		candidates: [
+			{
+				source: "default",
+				profileName: "quality",
+				panel: ["named/ready", "named/locked"],
+				judge: "named/ready",
+				maxPanelModels: 3,
+			},
+			{ source: "legacy", panel: ["legacy/fallback"], maxPanelModels: 3 },
+		],
+	});
+
+	eq(result.panel.map(modelDisplay), ["named/ready"], "partial named panel is retained");
+	eq(result.source, "default", "named default remains the source");
+	eq(result.profileName, "quality", "named panel metadata is retained");
+});
+
+test("zero-auth named default retries legacy before auto selection", async () => {
+	const models = [fakeModel("named", "locked"), fakeModel("legacy", "ready"), fakeModel("auto", "other")];
+	let autoReads = 0;
+	const registry = {
+		find(provider: string, id: string) {
+			return models.find((m) => m.provider === provider && m.id === id);
+		},
+		getAll() {
+			return models;
+		},
+		getAvailable() {
+			autoReads++;
+			return models.filter((m) => m.id !== "locked");
+		},
+		hasConfiguredAuth(model: (typeof models)[number]) {
+			return model.id !== "locked";
+		},
+	} as any;
+
+	const result = await resolvePanelAndJudge(registry, {
+		candidates: [
+			{ source: "default", profileName: "quality", panel: ["named/locked"], maxPanelModels: 3 },
+			{ source: "legacy", panel: ["legacy/ready"], maxPanelModels: 3 },
+		],
+	});
+
+	eq(result.panel.map(modelDisplay), ["legacy/ready"], "legacy panel wins before auto");
+	eq(result.source, "legacy", "legacy source is reported");
+	eq(autoReads, 0, "auto selection is not consulted after legacy succeeds");
+});
+
+test("session panel without a judge falls back to the configured judge", async () => {
+	const panel = fakeModel("session", "panel");
+	const judge = fakeModel("config", "judge");
+	const models = [panel, judge];
+	const registry = {
+		find(provider: string, id: string) {
+			return models.find((model) => model.provider === provider && model.id === id);
+		},
+		getAll: () => models,
+		getAvailable: () => models,
+		hasConfiguredAuth: () => true,
+	} as any;
+
+	const result = await resolvePanelAndJudge(registry, {
+		candidates: [{ source: "session", panel: ["session/panel"], maxPanelModels: 8 }],
+		autoJudge: "config/judge",
+	});
+
+	eq(modelDisplay(result.judge), "config/judge", "legacy session-to-config judge fallback is preserved");
+});
+
+test("strict zero-auth named panel stops without reading fallback models", async () => {
+	const model = fakeModel("named", "locked");
+	let autoReads = 0;
+	const registry = {
+		find() {
+			return model;
+		},
+		getAll() {
+			return [model];
+		},
+		getAvailable() {
+			autoReads++;
+			return [model];
+		},
+		hasConfiguredAuth() {
+			return false;
+		},
+	} as any;
+
+	let error: unknown;
+	try {
+		await resolvePanelAndJudge(registry, {
+			candidates: [
+				{ source: "explicit", profileName: "quality", panel: ["named/locked"], maxPanelModels: 3, strict: true },
+				{ source: "legacy", panel: ["named/locked"], maxPanelModels: 3 },
+			],
+		});
+	} catch (caught) {
+		error = caught;
+	}
+
+	if (!(error instanceof PanelSelectionError)) throw new Error("expected a strict panel selection error");
+	eq(error.profileName, "quality", "strict error identifies the named panel");
+	eq(autoReads, 0, "strict failure never reaches auto selection");
 });

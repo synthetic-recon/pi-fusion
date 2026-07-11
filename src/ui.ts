@@ -16,14 +16,15 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
-import { MAX_PANEL_MODELS_HARD_LIMIT } from "./config.ts";
+import { MAX_PANEL_MODELS_HARD_LIMIT, THINKING_LEVELS } from "./config.ts";
 import { modelDisplay } from "./models.ts";
 import { clampMaxToolCalls, isMutatingSelection } from "./tools.ts";
-import type { Api, FooterDisplay, Model, ToolMode } from "./types.ts";
+import type { Api, FooterDisplay, Model, ThinkingLevel, ToolMode } from "./types.ts";
 
 const TOOL_MODE_CYCLE: ToolMode[] = ["none", "readonly", "all"];
 const FOOTER_DISPLAY_CYCLE: FooterDisplay[] = ["full", "compact", "off"];
 const MAX_CALLS_PRESETS = [4, 8, 12, 16, 25, 50, 100];
+const REASONING_CYCLE = ["default", ...THINKING_LEVELS] as const;
 
 interface ModelInfo {
 	identifier: string;
@@ -33,9 +34,22 @@ interface ModelInfo {
 
 export type FusionMode = "available" | "forced" | "off";
 
+export interface FusionSetupProfile {
+	selectedIds: string[];
+	judgeId: string | undefined;
+	panelReasoning?: ThinkingLevel;
+	judgeReasoning?: ThinkingLevel;
+}
+
 export interface FusionSetupState {
 	selectedIds: Set<string>;
 	judgeId: string | undefined;
+	/** Source named panel while profile-owned values still match its snapshot. */
+	profileName?: string;
+	/** Authed named-panel snapshots available to the setup picker. */
+	profiles?: Record<string, FusionSetupProfile>;
+	panelReasoning?: ThinkingLevel;
+	judgeReasoning?: ThinkingLevel;
 	/** Legacy boolean: true => forced, false/undefined => available. */
 	enabled?: boolean;
 	mode?: FusionMode;
@@ -45,8 +59,24 @@ export interface FusionSetupState {
 	maxToolCalls?: number;
 	/** Whether the user consented to mutating panel tools this session. */
 	toolsConsented?: boolean;
-	/** Footer verbosity for this session. */
+	/** Fusion status verbosity for this session. */
 	footerDisplay?: FooterDisplay;
+}
+
+/** Copy a configured named panel into detached session/setup state. */
+export function applySetupProfile(state: FusionSetupState, profileName: string): void {
+	const profile = state.profiles?.[profileName];
+	if (!profile) return;
+	state.selectedIds = new Set(profile.selectedIds);
+	state.judgeId = profile.judgeId;
+	state.panelReasoning = profile.panelReasoning;
+	state.judgeReasoning = profile.judgeReasoning;
+	state.profileName = profileName;
+}
+
+/** Profile-owned edits turn the setup selection into a custom snapshot. */
+export function markSetupCustom(state: Pick<FusionSetupState, "profileName">): void {
+	state.profileName = undefined;
 }
 
 function toModelInfo(available: Model<Api>[]): ModelInfo[] {
@@ -131,6 +161,10 @@ export async function selectFusionSetup(
 	const state: FusionSetupState = {
 		selectedIds: new Set(initial.selectedIds),
 		judgeId: initial.judgeId,
+		profileName: initial.profileName,
+		profiles: initial.profiles,
+		panelReasoning: initial.panelReasoning,
+		judgeReasoning: initial.judgeReasoning,
 		enabled: initial.enabled ?? false,
 		panelTools: initial.panelTools ?? "none",
 		maxToolCalls: clampMaxToolCalls(initial.maxToolCalls),
@@ -145,7 +179,41 @@ export async function selectFusionSetup(
 		set: (value: string) => void;
 		note: () => string;
 	}
-	const configRows: ConfigRow[] = [
+	const configRows: ConfigRow[] = [];
+	const profileNames = Object.keys(state.profiles ?? {}).sort();
+	if (profileNames.length > 0) {
+		configRows.push({
+			label: "Named panel",
+			values: ["custom", ...profileNames],
+			get: () => state.profileName ?? "custom",
+			set: (value) => {
+				if (value === "custom") markSetupCustom(state);
+				else applySetupProfile(state, value);
+			},
+			note: () => "select a configured panel or keep a custom session snapshot",
+		});
+	}
+	configRows.push(
+		{
+			label: "Panel reasoning",
+			values: [...REASONING_CYCLE],
+			get: () => state.panelReasoning ?? "default",
+			set: (value) => {
+				state.panelReasoning = value === "default" ? undefined : value as ThinkingLevel;
+				markSetupCustom(state);
+			},
+			note: () => "reasoning effort copied into this session snapshot",
+		},
+		{
+			label: "Judge reasoning",
+			values: [...REASONING_CYCLE],
+			get: () => state.judgeReasoning ?? "default",
+			set: (value) => {
+				state.judgeReasoning = value === "default" ? undefined : value as ThinkingLevel;
+				markSetupCustom(state);
+			},
+			note: () => "judge reasoning effort copied into this session snapshot",
+		},
 		{
 			label: "Panel tools",
 			values: TOOL_MODE_CYCLE,
@@ -171,7 +239,7 @@ export async function selectFusionSetup(
 			note: () => "max tool steps per panel model when tools are on",
 		},
 		{
-			label: "Footer",
+			label: "Fusion status",
 			values: FOOTER_DISPLAY_CYCLE,
 			get: () => state.footerDisplay ?? "full",
 			set: (v) => {
@@ -179,12 +247,12 @@ export async function selectFusionSetup(
 			},
 			note: () =>
 				state.footerDisplay === "off"
-					? "restore Pi's built-in footer"
+					? "hide Fusion status"
 					: state.footerDisplay === "compact"
 						? "show only fusion mode and panel count"
 						: "show fusion mode, panel, judge, and tools",
 		},
-	];
+	);
 
 	return ctx.ui.custom<FusionSetupState | null>((tui, theme, _kb, done) => {
 		let focus: "models" | "config" = "models";
@@ -245,7 +313,8 @@ export async function selectFusionSetup(
 		function panelSummary(): string {
 			const names = Array.from(state.selectedIds).map((id) => nameById.get(id) ?? id);
 			if (names.length === 0) return dim("Panel: ") + warn("none selected (press p)");
-			return dim(`Panel (${names.length}): `) + names.join(", ");
+			const source = profileNames.length > 0 ? `, ${state.profileName ?? "custom"}` : "";
+			return dim(`Panel (${names.length}${source}): `) + names.join(", ");
 		}
 		function judgeSummary(): string {
 			const judge = state.judgeId ? (nameById.get(state.judgeId) ?? state.judgeId) : undefined;
@@ -315,6 +384,10 @@ export async function selectFusionSetup(
 			done({
 				selectedIds: new Set(state.selectedIds),
 				judgeId: state.judgeId,
+				profileName: state.profileName,
+				profiles: state.profiles,
+				panelReasoning: state.panelReasoning,
+				judgeReasoning: state.judgeReasoning,
 				enabled: state.enabled,
 				panelTools: state.panelTools,
 				maxToolCalls: state.maxToolCalls,
@@ -409,6 +482,7 @@ export async function selectFusionSetup(
 							tui.requestRender();
 						} else {
 							state.selectedIds = togglePanelMember(state.selectedIds, item.value);
+							markSetupCustom(state);
 							refresh();
 						}
 					}
@@ -418,12 +492,14 @@ export async function selectFusionSetup(
 					const item = selectList.getSelectedItem();
 					if (item) {
 						state.judgeId = toggleJudgeSelection(state.judgeId, item.value);
+						markSetupCustom(state);
 						refresh();
 					}
 					return;
 				}
 				if (data === "c") {
 					state.selectedIds = new Set();
+					markSetupCustom(state);
 					refresh();
 					return;
 				}

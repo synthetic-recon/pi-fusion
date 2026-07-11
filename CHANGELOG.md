@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added reusable named panels in `fusion.json`, including a configurable default, independent panel/judge reasoning effort, one-shot `--panel` command selection, and profile-derived snapshots in `/fusion-setup`.
+- Reasoning effort now uses Pi's provider-neutral levels for panel and judge calls. Unsupported levels are omitted per model with a visible warning, including during multi-turn panel tool use.
+- Fusion now publishes its mode, effective named panel, reasoning, judge, and tool state through Pi's keyed status API. It no longer owns or replaces the footer, so built-in and third-party footer extensions compose normally.
+- Require Pi peer packages 0.74.0 or newer, the earliest verified release line containing the reasoning, keyed-status, session, and lifecycle APIs used by Fusion.
+
 ## 0.7.6
 
 - pi-fusion's custom footer now preserves status text from other Pi extensions instead of hiding it while fusion is active. Third-party footer statuses are sorted, sanitized, and width-truncated before rendering.
