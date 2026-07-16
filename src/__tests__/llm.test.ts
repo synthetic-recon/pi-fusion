@@ -59,6 +59,39 @@ test("completion options preserve token and temperature inputs while adding reas
 	eq(options.reasoning, "high", "supported reasoning is attached");
 });
 
+test("completion options omit temperature for GitHub Copilot gpt-5.6-sol", async () => {
+	const model = fakeModel("github-copilot", "gpt-5.6-sol", { api: "openai-responses" as Api });
+	const options = await buildCompleteOptions({
+		async getApiKeyAndHeaders() {
+			return { ok: true, apiKey: "test" };
+		},
+	} as any, model, 2048, 0.3, undefined);
+
+	eq(Object.hasOwn(options, "temperature"), false, "unsupported temperature property is omitted");
+});
+
+test("completion options keep temperature for neighboring GitHub Copilot models", async () => {
+	const model = fakeModel("github-copilot", "gpt-5.6", { api: "openai-responses" as Api });
+	const options = await buildCompleteOptions({
+		async getApiKeyAndHeaders() {
+			return { ok: true, apiKey: "test" };
+		},
+	} as any, model, 2048, 0.3, undefined);
+
+	eq(options.temperature, 0.3, "neighboring Copilot model retains temperature");
+});
+
+test("completion options keep temperature for gpt-5.6-sol under another provider", async () => {
+	const model = fakeModel("openai", "gpt-5.6-sol", { api: "openai-responses" as Api });
+	const options = await buildCompleteOptions({
+		async getApiKeyAndHeaders() {
+			return { ok: true, apiKey: "test" };
+		},
+	} as any, model, 2048, 0.3, undefined);
+
+	eq(options.temperature, 0.3, "same model id under another provider retains temperature");
+});
+
 test("tool-loop finalization reuses reasoning on every raw completion", async () => {
 	const registration = registerFauxProvider({
 		api: `fusion-reasoning-${Date.now()}`,

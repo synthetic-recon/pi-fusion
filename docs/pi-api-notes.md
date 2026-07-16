@@ -21,6 +21,14 @@ intentional; each carries a matching `// pi gap:` comment at its call site.
   TS narrows the value, not the type parameter, so one precise cast remains; a
   `modelSupportsTemperature(model)` export in `pi-ai` would remove even that.
 
+- **OpenAI Responses metadata cannot express temperature support.** The exact
+  `github-copilot/gpt-5.6-sol` model rejects `temperature`, but Pi's OpenAI Responses model
+  metadata has no equivalent to Anthropic's `supportsTemperature` capability. `src/llm.ts`
+  (`getSupportsTemperature`) therefore excludes only that canonical provider/model pair; other
+  GitHub Copilot and `gpt-5.6-sol` combinations remain unchanged. An OpenAI Responses-compatible
+  temperature-support capability in `pi-ai`, populated as unsupported for this exact pair, would
+  remove the workaround.
+
 > Resolved (no longer a gap): an earlier `withSignal` Proxy over `ExtensionContext` was removed —
 > every built-in tool honors the explicit `signal` argument passed to `execute`, and pi-fusion has
 > no separate per-panel signal, so the Proxy was redundant.

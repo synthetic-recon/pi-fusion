@@ -263,6 +263,13 @@ function truncateToolContent(content: ToolContent): ToolContent {
 }
 
 export function getSupportsTemperature(model: Model<Api>): boolean {
+	// pi gap: GitHub Copilot's gpt-5.6-sol rejects temperature, but Pi currently has no
+	// OpenAI Responses capability flag for this. Keep the workaround pinned to the exact
+	// canonical provider/model pair so neighboring Copilot models remain metadata-driven.
+	// Remove it when Pi exposes that capability and marks this exact pair unsupported.
+	// See docs/pi-api-notes.md.
+	if (model.provider === "github-copilot" && model.id === "gpt-5.6-sol") return false;
+
 	// Anthropic encodes this in model metadata (e.g. Opus 4.7+ set supportsTemperature:false,
 	// and the Anthropic provider already withholds temperature accordingly). The `api`
 	// discriminant narrows the value; `compat` still needs a precise (non-`any`) cast because
