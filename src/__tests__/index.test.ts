@@ -50,6 +50,26 @@ test("parsePanelCommand rejects missing panel names and prompts", () => {
 	if (!missingPrompt.error.includes("prompt")) throw new Error(`unexpected error: ${missingPrompt.error}`);
 });
 
+test("fusion tool schema exposes only prompt and context controls", () => {
+	let parameters: unknown;
+	registerFusionExtension({
+		registerTool(tool: { parameters: unknown }) {
+			parameters = tool.parameters;
+		},
+		registerCommand() {},
+		on() {},
+		getThinkingLevel: () => "off",
+	} as never);
+
+	const properties = (parameters as { properties?: Record<string, unknown> } | undefined)?.properties;
+	if (!properties) throw new Error("expected fusion tool parameters");
+	eq(
+		Object.keys(properties),
+		["prompt", "context_mode", "context_turns"],
+		"model-controlled schema remains user-configuration-free",
+	);
+});
+
 test("pending panel is session-bound, agent-bound, and consumed once", () => {
 	let pending: PendingPanelSelection | undefined = armPendingPanel("fast", "session-a");
 	eq(consumePendingPanel(pending, "session-a"), { panelName: undefined, pending }, "not consumed before agent start");

@@ -3,7 +3,6 @@
  */
 
 import {
-	complete,
 	getSupportedThinkingLevels,
 	type Api,
 	type AssistantMessage,
@@ -14,6 +13,7 @@ import {
 	type ToolResultMessage,
 	type ThinkingLevel,
 } from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { TOOL_OUTPUT_MAX_BYTES } from "./config.ts";
 import { modelDisplay } from "./models.ts";

@@ -47,7 +47,7 @@ pi install /path/to/pi-fusion                       # from a local checkout
 
 After installing or updating in a running session, run `/reload`.
 
-There's no build step; pi loads the TypeScript directly via [jiti](https://github.com/unjs/jiti). Requires Node ≥ 22.19.0 and Pi ≥ 0.74.0.
+There's no build step; pi loads the TypeScript directly via [jiti](https://github.com/unjs/jiti). Requires Node ≥ 22.19.0 and Pi ≥ 0.80.6.
 
 ## Quick start
 
@@ -137,7 +137,7 @@ Generate a project-local template with `/fusion-init`, or write one by hand. Nam
       ],
       "judge": "anthropic/claude-opus-4-8",
       "panelReasoning": "high",
-      "judgeReasoning": "xhigh"
+      "judgeReasoning": "max"
     },
     "fast": {
       "models": ["openai/gpt-5.5-mini", "google/gemini-2.5-flash"],
@@ -161,7 +161,7 @@ Generate a project-local template with `/fusion-init`, or write one by hand. Nam
 | `defaultPanel` | none | Named panel used when there is no one-shot or session selection. An invalid default warns and falls through to legacy or auto selection. |
 | `panel` | auto-diverse | Legacy top-level model identifiers in `provider/id` form. Still supported; only authed models are used. |
 | `judge` | current model, then first panel model | Legacy/default judge model identifier in `provider/id` form. Named panels inherit it when they omit `judge`. |
-| `panelReasoning` | provider default | Reasoning effort for panel calls: `minimal`, `low`, `medium`, `high`, or `xhigh`. Named panels may override it. |
+| `panelReasoning` | provider default | Reasoning effort for panel calls: `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. Named panels may override it. |
 | `judgeReasoning` | provider default | Independent reasoning effort for judge synthesis, using the same levels. Named panels may override it. |
 | `maxPanelModels` | 3 | Max panel size (1–8). |
 | `maxPanelOutputTokens` | 2048 | Max tokens per panel response. |

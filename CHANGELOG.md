@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2
+
+- Added `max` reasoning effort for panel and judge configuration, including `/fusion-setup`. Models that support `max` receive it; lower-ceiling models keep the existing non-fatal warn-and-omit behavior without clamping.
+- Raised the minimum supported Pi peer versions to 0.80.6 and moved legacy completion/faux-provider registration to Pi's compatibility entrypoint. The model-controlled `fusion` tool schema remains unchanged.
+
 ## 0.8.1
 
 - Fixed GitHub Copilot `gpt-5.6-sol` requests failing with a 400 by omitting the unsupported `temperature` parameter for that exact provider/model pair. Other Copilot models and providers retain their existing temperature behavior.

@@ -29,7 +29,7 @@ export const MAX_TOOL_CALLS = 100;
 /** Per tool result, before it re-enters the loop transcript (keeps panel context bounded). */
 export const TOOL_OUTPUT_MAX_BYTES = 12_000;
 
-export const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh"] as const;
+export const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ThinkingLevel[];
 
 export interface FusionConfigOverrides {
 	max_completion_tokens?: number;
