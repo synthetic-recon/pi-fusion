@@ -35,15 +35,19 @@ test("ordinary openai-compatible model keeps temperature", () => {
 test("resolveModelReasoning preserves supported effort and omits unsupported effort", () => {
 	const supported = fakeModel("openai", "reasoner", {
 		reasoning: true,
+		thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+	});
+	const unsupported = fakeModel("openai", "lower-ceiling", {
+		reasoning: true,
 		thinkingLevelMap: { xhigh: "xhigh" },
 	});
-	const unsupported = fakeModel("openai", "plain");
 
 	eq(resolveModelReasoning(supported, "xhigh"), { requested: "xhigh", effective: "xhigh" }, "supported xhigh");
-	eq(resolveModelReasoning(unsupported, "high"), {
-		requested: "high",
-		warning: "Reasoning high is not supported by openai/plain; running that model without requested reasoning.",
-	}, "unsupported reasoning is omitted with a model-specific warning");
+	eq(resolveModelReasoning(supported, "max"), { requested: "max", effective: "max" }, "supported max");
+	eq(resolveModelReasoning(unsupported, "max"), {
+		requested: "max",
+		warning: "Reasoning max is not supported by openai/lower-ceiling; running that model without requested reasoning.",
+	}, "unsupported max is omitted without clamping");
 	eq(resolveModelReasoning(supported, undefined), {}, "unset reasoning is unchanged");
 });
 
@@ -93,7 +97,7 @@ test("completion options keep temperature for gpt-5.6-sol under another provider
 	eq(options.temperature, 0.3, "same model id under another provider retains temperature");
 });
 
-test("tool-loop finalization reuses reasoning on every raw completion", async () => {
+test("tool-loop finalization reuses max reasoning on every raw completion", async () => {
 	const registration = registerFauxProvider({
 		api: `fusion-reasoning-${Date.now()}`,
 		provider: "fusion-test",
@@ -130,12 +134,12 @@ test("tool-loop finalization reuses reasoning on every raw completion", async ()
 			1,
 			{} as any,
 			(event) => toolEvents.push(event.name),
-			"high",
+			"max",
 		);
 	} finally {
 		registration.unregister();
 	}
 
-	eq(seen, ["high", "high"], "initial and forced-final completions share reasoning");
+	eq(seen, ["max", "max"], "initial and forced-final completions share max reasoning");
 	eq(toolEvents, ["probe"], "existing callback position remains compatible");
 });

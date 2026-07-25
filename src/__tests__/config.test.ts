@@ -7,6 +7,7 @@ import {
 	generateConfigExample,
 	parseFusionConfig,
 	resolveEffectiveConfig,
+	THINKING_LEVELS,
 } from "../config.ts";
 import type { FusionConfig } from "../types.ts";
 import { eq, test } from "./_harness.ts";
@@ -129,6 +130,54 @@ test("invalid top-level reasoning is omitted with deterministic warnings", () =>
 	eq(result.config.panelReasoning, undefined, "invalid panel effort omitted");
 	eq(result.config.judgeReasoning, undefined, "invalid judge effort omitted");
 	eq(result.warnings.length, 2, "both invalid efforts warn");
+});
+
+test("max reasoning is accepted at top level and in named panels", () => {
+	const config: FusionConfig = {
+		panelReasoning: "max",
+		judgeReasoning: "max",
+		panels: {
+			explicit: {
+				models: ["provider/panel"],
+				judgeReasoning: "max",
+			},
+			default: {
+				models: ["provider/panel"],
+				panelReasoning: "max",
+			},
+		},
+		defaultPanel: "default",
+	};
+
+	const explicit = resolveEffectiveConfig(config, {}, "explicit");
+	if (!explicit.ok) throw new Error(explicit.error.message);
+	eq(explicit.config.panelReasoning, "max", "explicit panel inherits top-level max");
+	eq(explicit.config.judgeReasoning, "max", "explicit panel preserves judge max");
+	eq(explicit.warnings, [], "valid explicit max values do not warn");
+
+	const selectedDefault = resolveEffectiveConfig(config);
+	if (!selectedDefault.ok) throw new Error(selectedDefault.error.message);
+	eq(selectedDefault.config.panelReasoning, "max", "default panel preserves panel max");
+	eq(selectedDefault.config.judgeReasoning, "max", "default panel inherits top-level judge max");
+	eq(selectedDefault.warnings, [], "valid default max values do not warn");
+});
+
+test("thinking levels remain ordered and reject non-canonical max spellings", () => {
+	eq(THINKING_LEVELS, ["minimal", "low", "medium", "high", "xhigh", "max"], "shared reasoning order");
+
+	const config = {
+		panelReasoning: "MAX",
+		judgeReasoning: "maximum",
+	} as unknown as FusionConfig;
+	const result = resolveEffectiveConfig(config);
+	if (!result.ok) throw new Error(result.error.message);
+
+	eq(result.config.panelReasoning, undefined, "uppercase max remains invalid");
+	eq(result.config.judgeReasoning, undefined, "maximum remains invalid");
+	eq(result.warnings, [
+		"Invalid panelReasoning value; omitting it. Expected minimal, low, medium, high, xhigh, max.",
+		"Invalid judgeReasoning value; omitting it. Expected minimal, low, medium, high, xhigh, max.",
+	], "invalid warnings list the canonical ordered values");
 });
 
 test("effective selection preserves applyDefaults overrides and numeric config", () => {
