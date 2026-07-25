@@ -2,7 +2,8 @@
  * Tests for provider/model request compatibility.
  */
 
-import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { buildCompleteOptions, callModelWithTools, getSupportsTemperature, resolveModelReasoning } from "../llm.ts";
 import type { Api, Model, ThinkingLevel } from "../types.ts";
 import { eq, fakeModel, test } from "./_harness.ts";

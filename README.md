@@ -47,7 +47,7 @@ pi install /path/to/pi-fusion                       # from a local checkout
 
 After installing or updating in a running session, run `/reload`.
 
-There's no build step; pi loads the TypeScript directly via [jiti](https://github.com/unjs/jiti). Requires Node ≥ 22.19.0 and Pi ≥ 0.74.0.
+There's no build step; pi loads the TypeScript directly via [jiti](https://github.com/unjs/jiti). Requires Node ≥ 22.19.0 and Pi ≥ 0.80.6.
 
 ## Quick start
 
