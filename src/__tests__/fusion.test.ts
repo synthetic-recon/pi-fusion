@@ -25,7 +25,7 @@ test("emptyPanelError attributes a capped empty to the loop guard/budget", () =>
 	eq(emptyPanelError("", true), "no text answer (tool-call budget or loop guard hit)", "capped + empty");
 });
 
-function registryFor(models: ReturnType<typeof fakeModel>[], authed: Set<string> = new Set(models.map((m) => `${m.provider}/${m.id}`))) {
+function registryFor(models: Model<Api>[], authed: Set<string> = new Set(models.map((m) => `${m.provider}/${m.id}`))) {
 	return {
 		find(provider: string, id: string) {
 			return models.find((m) => m.provider === provider && m.id === id);
@@ -36,7 +36,7 @@ function registryFor(models: ReturnType<typeof fakeModel>[], authed: Set<string>
 		getAvailable() {
 			return models.filter((m) => authed.has(`${m.provider}/${m.id}`));
 		},
-		hasConfiguredAuth(model: ReturnType<typeof fakeModel>) {
+		hasConfiguredAuth(model: Model<Api>) {
 			return authed.has(`${model.provider}/${model.id}`);
 		},
 	} as any;
@@ -206,7 +206,7 @@ test("runFusion dispatches max per model and preserves warning order", async () 
 
 	const cwd = trustedProjectConfig();
 	const registry = {
-		...registryFor([panelMax, panelLower, judgeMax] as ReturnType<typeof fakeModel>[]),
+		...registryFor([panelMax, panelLower, judgeMax]),
 		async getApiKeyAndHeaders() {
 			return { ok: true, apiKey: "test" };
 		},
@@ -283,7 +283,7 @@ test("single panel success skips unsupported max judge without warning", async (
 
 	const cwd = trustedProjectConfig();
 	const registry = {
-		...registryFor([panel, judge] as ReturnType<typeof fakeModel>[]),
+		...registryFor([panel, judge]),
 		async getApiKeyAndHeaders() {
 			return { ok: true, apiKey: "test" };
 		},
