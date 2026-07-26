@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.0
+
+- Resolved the `brace-expansion` and `protobufjs` denial-of-service advisories in the development dependency tree by pinning their patched transitive releases.
+
 ## 0.8.2
 
 - Added `max` reasoning effort for panel and judge configuration, including `/fusion-setup`. Models that support `max` receive it; lower-ceiling models keep the existing non-fatal warn-and-omit behavior without clamping.
