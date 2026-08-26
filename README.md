@@ -205,11 +205,11 @@ The prompt goes to every panel model and the judge, all models you're already au
 
 **Why didn't fusion run when I asked?**
 
-In `available` mode the model decides. If you want a guaranteed run, use `/fusion <prompt>` for one prompt or `/fusion on` for the session. Forced mode also needs at least one usable panel model, so check `/fusion-status`.
+In `available` mode the model decides. If you want a guaranteed run, use `/fusion <prompt>` for one prompt or `/fusion on` for the session. `/fusion on` needs a `/fusion-setup` snapshot, `fusion.json`, or `defaultPanel` (auto-select is not enough); `/fusion-status` says “not set up” until then.
 
 **Why did I get one model's answer with no analysis?**
 
-The judge synthesis only runs when **two or more** panel models succeed. If a single model answers (others failed or weren't authed), its response is returned directly.
+The judge synthesis only runs when **two or more** panel models succeed. If a single model answers (others failed or weren't authed), its response is returned directly. If two or more answered but the judge JSON failed, you get short excerpts and a warning; `/fusion-report` has the full text.
 
 **Which models get picked, and why was one skipped?**
 
