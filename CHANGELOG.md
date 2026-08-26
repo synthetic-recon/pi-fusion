@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clarified README and the `/fusion on` empty-panel message: forced mode needs a resolvable panel from `fusion.json` / `defaultPanel` / `/fusion-setup`, not auto-select.
+
 ## 0.9.1
 
 - `/fusion on` (and the bare toggle into forced) now uses the already-resolved panel from `fusion.json` / `defaultPanel` when the session has no `/fusion-setup` snapshot. Forced mode writes `mode` only; config stays the panel source until `/fusion-setup`.

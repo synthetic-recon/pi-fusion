@@ -518,7 +518,7 @@ export default function (pi: ExtensionAPI) {
 			if (!prompt || modeCommand) {
 				pendingPanel = undefined;
 				if (!panel?.selectedIds.size && (modeCommand === "forced" || (!prompt && !modeCommand))) {
-					const message = "No fusion setup yet. Run /fusion-setup first, or use /fusion off to disable.";
+					const message = "No fusion setup yet: configure fusion.json / defaultPanel, run /fusion-setup, or use /fusion off to disable.";
 					if (ctx.mode === "print") console.log(message);
 					else ctx.ui.notify(message, "warning");
 					return;
