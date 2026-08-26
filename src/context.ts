@@ -2,11 +2,25 @@
  * Conversation-context helpers for optional fusion context.
  */
 
+import { extractJson } from "./utils.ts";
+
 const MAX_CONTEXT_TURNS = 10;
 const DEFAULT_CONTEXT_TURNS = 4;
 const MAX_CONTEXT_CHARS = 20000;
 
 export type FusionContextMode = "none" | "recent";
+
+/** Prior fusion-state or a dump that has panel bodies plus panel_models. */
+export function isFusionDumpText(text: string): boolean {
+	const parsed = extractJson<Record<string, unknown>>(text);
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+	if (parsed.status !== "ok" && parsed.status !== "error") return false;
+	return ("responses" in parsed || "excerpts" in parsed) && "panel_models" in parsed;
+}
+
+function isFusionDumpEntry(entry: { customType?: unknown }): boolean {
+	return entry.customType === "fusion-state";
+}
 
 export function normalizeContextTurns(value: number | undefined): number {
 	if (value === undefined || !Number.isFinite(value)) return DEFAULT_CONTEXT_TURNS;
@@ -36,12 +50,13 @@ export function buildRecentContextFromEntries(entries: unknown[], turns: number 
 	let userMessagesSeen = 0;
 
 	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i] as { type?: unknown; message?: { role?: unknown } };
+		const entry = entries[i] as { type?: unknown; customType?: unknown; message?: { role?: unknown; toolName?: unknown } };
+		if (isFusionDumpEntry(entry)) continue;
 		if (entry?.type !== "message" || !entry.message) continue;
 		const role = entry.message.role;
 		if (role !== "user" && role !== "assistant") continue;
 		const text = extractMessageText(entry.message);
-		if (!text) continue;
+		if (!text || isFusionDumpText(text)) continue;
 		messages.unshift({ role, text });
 		if (role === "user") {
 			userMessagesSeen++;

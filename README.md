@@ -33,7 +33,7 @@ When the `fusion` tool runs, pi:
    - **partial_coverage**: points only some models raised
    - **unique_insights**: ideas raised by a single model
    - **blind_spots**: topics no panel model addressed
-4. Your active model receives the analysis plus the raw responses and writes the final answer.
+4. Your active model receives the analysis plus short excerpts of each panel answer and writes the final answer. If only one panel model succeeds, that full response is returned directly. Full multi-panel text stays in `/fusion-report`.
 
 When two or more panel models answer, the judge synthesis runs. If only one model succeeds, the single response is returned directly (no synthesis).
 
@@ -79,7 +79,7 @@ Use fusion to evaluate whether we should migrate to the Next.js App Router.
 ### Session modes
 
 ```
-/fusion on        # force every prompt through fusion (alias: forced); needs a panel from /fusion-setup
+/fusion on        # force every prompt through fusion (alias: forced); uses the session, fusion.json, or defaultPanel
 /fusion available # enable fusion; the model decides when to use it (alias: auto)
 /fusion off       # disable fusion and block fusion tool calls for the session (alias: disable)
 /fusion           # no argument: toggle between available and forced
@@ -112,7 +112,7 @@ Panel and judge calls do **not** see the whole pi conversation thread. When prio
 }
 ```
 
-`context_mode` defaults to `"none"`. `context_turns` is clamped to 1–10 (default 4). The judge sees the same context-expanded task the panel saw, plus the panel responses.
+`context_mode` defaults to `"none"`. `context_turns` is clamped to 1–10 (default 4). The judge sees the same context-expanded task the panel saw, plus the panel responses. Recent context skips prior fusion-state entries, fusion tool results, and assistant messages that are fusion details so those dumps are not sent to every panelist again.
 
 ## Configuration
 
@@ -223,7 +223,7 @@ Yes. `/fusion-setup` and the stateful `/fusion --panel` form are interactive-onl
 
 **How do I see what the panel and judge actually said?**
 
-`/fusion-report [--panel <name>] <prompt>` runs fusion directly and writes the raw panel/judge diagnostic report into the editor.
+`/fusion-report [--panel <name>] <prompt>` runs fusion directly and writes the raw panel/judge diagnostic report into the editor. The `fusion` tool result itself returns analysis plus short excerpts so later turns do not re-pay the full panel dump.
 
 ## Commands
 

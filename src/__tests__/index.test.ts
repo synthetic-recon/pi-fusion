@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test, eq, fakeModel } from "./_harness.ts";
 import registerFusionExtension, {
 	activatePendingPanel,
@@ -68,6 +71,105 @@ test("fusion tool schema exposes only prompt and context controls", () => {
 		["prompt", "context_mode", "context_turns"],
 		"model-controlled schema remains user-configuration-free",
 	);
+});
+
+test("/fusion on uses fusion.json / defaultPanel when session has no selectedIds", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-fusion-on-"));
+	mkdirSync(join(cwd, ".pi"));
+	writeFileSync(join(cwd, ".pi", "fusion.json"), JSON.stringify({
+		defaultPanel: "quality",
+		panels: {
+			quality: {
+				models: ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"],
+				judge: "anthropic/claude-opus-4-5",
+			},
+		},
+	}));
+
+	const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+	let persisted: { selectedIds?: string[]; mode?: string; judgeId?: string } | undefined;
+	registerFusionExtension({
+		registerTool() {},
+		registerCommand(name: string, spec: { handler: (args: string, ctx: unknown) => Promise<void> }) {
+			commands.set(name, spec);
+		},
+		on() {},
+		appendEntry(_type: string, data: { selectedIds?: string[]; mode?: string; judgeId?: string }) {
+			persisted = data;
+		},
+		getThinkingLevel: () => "off",
+	} as never);
+
+	const logs: string[] = [];
+	const orig = console.log;
+	console.log = (msg?: unknown) => {
+		logs.push(String(msg ?? ""));
+	};
+	try {
+		const handler = commands.get("fusion")?.handler;
+		if (!handler) throw new Error("expected /fusion command");
+		await handler("on", {
+			cwd,
+			isProjectTrusted: () => true,
+			mode: "print",
+			sessionManager: { getBranch: () => [] },
+			ui: { notify() {}, setStatus() {} },
+		});
+		if (logs.some((line) => line.includes("No fusion setup"))) {
+			throw new Error(`forced mode rejected config panel: ${logs.join(" | ")}`);
+		}
+		eq(persisted?.mode, "forced", "persisted forced mode");
+		eq(persisted?.selectedIds, [], "config stays the panel source until /fusion-setup");
+		if (!logs.some((line) => line.includes("Fusion forced") && line.includes("2 panel"))) {
+			throw new Error(`expected forced footer from defaultPanel: ${logs.join(" | ")}`);
+		}
+	} finally {
+		console.log = orig;
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("forced input uses fusion.json when session stored mode only", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-fusion-input-"));
+	mkdirSync(join(cwd, ".pi"));
+	writeFileSync(join(cwd, ".pi", "fusion.json"), JSON.stringify({
+		panel: ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"],
+		judge: "anthropic/claude-opus-4-5",
+	}));
+
+	type EventHandler = (event: unknown, ctx: unknown) => unknown | Promise<unknown>;
+	const handlers = new Map<string, EventHandler>();
+	registerFusionExtension({
+		registerTool() {},
+		registerCommand() {},
+		on(event: string, handler: EventHandler) {
+			handlers.set(event, handler);
+		},
+		getThinkingLevel: () => "off",
+	} as never);
+
+	try {
+		const input = handlers.get("input");
+		if (!input) throw new Error("expected input handler");
+		const result = await input(
+			{ source: "user", text: "hello", images: undefined },
+			{
+				cwd,
+				isProjectTrusted: () => true,
+				sessionManager: {
+					getBranch: () => [{
+						type: "custom",
+						customType: "fusion-state",
+						data: { selectedIds: [], mode: "forced" },
+					}],
+				},
+				ui: { setStatus() {} },
+			},
+		);
+		eq((result as { action?: string }).action, "transform", "forced mode with config panel transforms input");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
 });
 
 test("pending panel is session-bound, agent-bound, and consumed once", () => {

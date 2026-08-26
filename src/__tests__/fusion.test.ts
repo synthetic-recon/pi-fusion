@@ -7,9 +7,51 @@ import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emptyPanelError, resolveFusionSelection, resolvePanelReasoning, runFusion } from "../fusion.ts";
+import { compactFusionToolText, emptyPanelError, parseFusionAnalysis, resolveFusionSelection, resolvePanelReasoning, runFusion } from "../fusion.ts";
 import type { Api, Model, ThinkingLevel } from "../types.ts";
 import { eq, fakeModel, test } from "./_harness.ts";
+
+test("parseFusionAnalysis defaults missing arrays to empty", () => {
+	const parsed = parseFusionAnalysis({ consensus: ["agreed"] });
+	eq(parsed, {
+		consensus: ["agreed"],
+		contradictions: [],
+		partial_coverage: [],
+		unique_insights: [],
+		blind_spots: [],
+	}, "missing arrays default to []");
+	eq(parseFusionAnalysis("not an object"), undefined, "non-object is unparseable");
+	eq(parseFusionAnalysis(undefined), undefined, "missing JSON is unparseable");
+	eq(parseFusionAnalysis({}), undefined, "empty object is not analysis");
+	eq(parseFusionAnalysis({ foo: 1 }), undefined, "unrelated object is not analysis");
+	eq(parseFusionAnalysis({ consensus: "string" }), undefined, "non-array analysis key is not analysis");
+});
+
+test("compactFusionToolText returns analysis plus excerpts, not full panel text", () => {
+	const long = "PANEL-FULL-".repeat(80);
+	const text = compactFusionToolText({
+		status: "ok",
+		analysis: { consensus: ["agreed"], contradictions: [], partial_coverage: [], unique_insights: [], blind_spots: [] },
+		responses: [{ model: "a/m", content: long }],
+		panel_models: ["a/m"],
+		judge_model: "a/j",
+	});
+	if (!text.includes("agreed")) throw new Error("expected analysis in tool result");
+	if (!text.includes("excerpts")) throw new Error("expected excerpts key");
+	if (text.includes(long)) throw new Error("tool result must not include full panel answer");
+	if (!text.includes("…")) throw new Error("expected truncated excerpt");
+});
+
+test("compactFusionToolText passes through a lone unjudged panel response", () => {
+	const long = "PANEL-FULL-".repeat(80);
+	const text = compactFusionToolText({
+		status: "ok",
+		responses: [{ model: "a/m", content: long }],
+		panel_models: ["a/m"],
+		judge_model: "a/j",
+	});
+	if (!text.includes(long)) throw new Error("single unjudged response must be returned in full");
+});
 
 test("emptyPanelError treats non-empty content as success", () => {
 	eq(emptyPanelError("a real answer", false), undefined, "normal");
@@ -309,6 +351,71 @@ test("single panel success skips unsupported max judge without warning", async (
 		eq(seen, ["panel"], "judge provider is never called");
 		eq(result.details.judge_reasoning, undefined, "skipped judge has no reasoning diagnostics");
 		eq(result.details.warnings, undefined, "skipped unsupported judge does not warn");
+		if (!result.content[0]?.text.includes("only panel answer")) {
+			throw new Error("single unjudged panel answer must pass through the tool result");
+		}
+	} finally {
+		registration.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("runFusion surfaces judge JSON failure instead of silent ok analysis", async () => {
+	const unique = Math.random().toString(36).slice(2);
+	const provider = `fusion-judge-fail-${unique}`;
+	const registration = registerFauxProvider({
+		api: `fusion-judge-fail-api-${unique}`,
+		provider,
+		models: [
+			{ id: "panel-a" },
+			{ id: "panel-b" },
+			{ id: "judge" },
+		],
+	});
+	const panelA = registration.getModel("panel-a") as Model<Api>;
+	const panelB = registration.getModel("panel-b") as Model<Api>;
+	const judge = registration.getModel("judge") as Model<Api>;
+	registration.setResponses([
+		() => fauxAssistantMessage("first panel answer that is long enough to be excerpted in the tool result"),
+		() => fauxAssistantMessage("second panel answer that is long enough to be excerpted in the tool result"),
+		() => fauxAssistantMessage("the judge said words but not JSON"),
+	]);
+
+	const cwd = trustedProjectConfig();
+	const registry = {
+		...registryFor([panelA, panelB, judge]),
+		async getApiKeyAndHeaders() {
+			return { ok: true, apiKey: "test" };
+		},
+	} as any;
+
+	try {
+		const result = await runFusion(
+			cwd,
+			registry,
+			undefined,
+			"compare",
+			true,
+			{
+				analysis_models: [`${provider}/panel-a`, `${provider}/panel-b`],
+				model: `${provider}/judge`,
+			},
+			{} as any,
+			false,
+			undefined,
+		);
+
+		eq(result.details.status, "ok", "panel success is still ok");
+		eq(result.details.analysis, undefined, "unparseable judge has no analysis");
+		eq(result.details.failure_reason, "unexpected_error", "judge failure is classified");
+		if (!result.details.warnings?.some((w) => w.includes("unparseable"))) {
+			throw new Error(`expected unparseable warning: ${result.details.warnings?.join("; ")}`);
+		}
+		const toolText = result.content[0]?.text ?? "";
+		if (/"responses"\s*:/.test(toolText)) throw new Error("tool result should use excerpts, not full responses");
+		if (!toolText.includes("excerpts")) throw new Error("expected excerpts in tool result");
+		if (!toolText.includes("failure_reason")) throw new Error("tool result should surface failure_reason");
+		eq(result.details.responses.length, 2, "details still keep full panel answers for /fusion-report");
 	} finally {
 		registration.unregister();
 		rmSync(cwd, { recursive: true, force: true });

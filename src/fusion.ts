@@ -33,7 +33,7 @@ import {
 	selectionLabel,
 	selectionToNames,
 } from "./tools.ts";
-import { extractJson, mapWithConcurrencyLimit } from "./utils.ts";
+import { extractJson, mapWithConcurrencyLimit, truncateToBytes } from "./utils.ts";
 import type {
 	FusionAnalysis,
 	FusionConfig,
@@ -45,6 +45,54 @@ import type {
 	ThinkingLevel,
 	ToolSelection,
 } from "./types.ts";
+
+/** Short excerpt budget for the tool result (full text stays on `details` for /fusion-report). */
+const TOOL_RESULT_EXCERPT_BYTES = 480;
+
+const ANALYSIS_KEYS = ["consensus", "contradictions", "partial_coverage", "unique_insights", "blind_spots"] as const;
+
+/** Accept judge JSON as FusionAnalysis; missing arrays default to []. */
+export function parseFusionAnalysis(value: unknown): FusionAnalysis | undefined {
+	if (value == null || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const obj = value as Record<string, unknown>;
+	if (!ANALYSIS_KEYS.some((key) => Array.isArray(obj[key]))) return undefined;
+	return {
+		consensus: Array.isArray(obj.consensus) ? obj.consensus : [],
+		contradictions: Array.isArray(obj.contradictions) ? obj.contradictions : [],
+		partial_coverage: Array.isArray(obj.partial_coverage) ? obj.partial_coverage : [],
+		unique_insights: Array.isArray(obj.unique_insights) ? obj.unique_insights : [],
+		blind_spots: Array.isArray(obj.blind_spots) ? obj.blind_spots : [],
+	};
+}
+
+/** Tool-visible payload: analysis + short excerpts. Full panel/judge text stays on `details`. */
+export function compactFusionToolText(details: FusionDetails): string {
+	const passThroughSingle = details.responses.length === 1 && !details.analysis;
+	return JSON.stringify(
+		{
+			status: details.status,
+			analysis: details.analysis,
+			excerpts: details.responses.map((r) => ({
+				model: r.model,
+				excerpt: passThroughSingle ? r.content : truncateToBytes(r.content, TOOL_RESULT_EXCERPT_BYTES, "…"),
+				...(r.tools ? { tools: r.tools } : {}),
+			})),
+			...(details.failed_models ? { failed_models: details.failed_models } : {}),
+			panel_models: details.panel_models,
+			judge_model: details.judge_model,
+			...(details.panel_profile ? { panel_profile: details.panel_profile } : {}),
+			...(details.warnings ? { warnings: details.warnings } : {}),
+			...(details.error ? { error: details.error } : {}),
+			...(details.failure_reason ? { failure_reason: details.failure_reason } : {}),
+		},
+		null,
+		2,
+	);
+}
+
+function fusionToolResult(details: FusionDetails): FusionResult {
+	return { content: [{ type: "text", text: compactFusionToolText(details) }], details };
+}
 
 /**
  * Classify a panel's final text. Blank output (a model that gathered tools but never
@@ -184,7 +232,7 @@ function selectionFailure(message: string, profileName: string | undefined, warn
 		error: message,
 		failure_reason: "unexpected_error",
 	};
-	return { ok: false, result: { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details } };
+	return { ok: false, result: fusionToolResult(details) };
 }
 
 export async function resolveFusionModels(
@@ -321,7 +369,7 @@ export async function runFusion(
 			error: "all panel models failed",
 			failure_reason: classifyAllPanelFailure(failed),
 		};
-		return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details };
+		return fusionToolResult(details);
 	}
 
 	onUpdate?.({
@@ -338,6 +386,7 @@ export async function runFusion(
 	});
 
 	let analysis: FusionAnalysis | undefined;
+	let judgeFailureReason: FusionDetails["failure_reason"];
 	let judgeReasoningDetails: FusionDetails["judge_reasoning"];
 	if (successful.length >= 2) {
 		const judgeReasoning = resolveModelReasoning(judge, requestedJudgeReasoning);
@@ -374,10 +423,15 @@ export async function runFusion(
 				judgeReasoning.effective,
 			);
 			const judgeText = getTextContent(judgeResponse);
-			analysis = extractJson<FusionAnalysis>(judgeText);
+			analysis = parseFusionAnalysis(extractJson(judgeText));
+			if (!analysis) {
+				warnings.push("Judge returned unparseable JSON; analysis is unavailable. Use /fusion-report for raw panel text.");
+				judgeFailureReason = "unexpected_error";
+			}
 		} catch (err) {
 			console.error("[pi-fusion] judge failed:", err);
-			analysis = undefined;
+			warnings.push("Judge call failed; analysis is unavailable. Use /fusion-report for raw panel text.");
+			judgeFailureReason = "unexpected_error";
 		}
 	}
 
@@ -397,9 +451,10 @@ export async function runFusion(
 			? { panel_tools: { mode: selectionLabel(toolSelection), max_tool_calls: maxToolCalls, serialized: mutating } }
 			: {}),
 		...(warnings.length > 0 ? { warnings } : {}),
+		...(judgeFailureReason ? { failure_reason: judgeFailureReason } : {}),
 	};
 
-	return { content: [{ type: "text", text: JSON.stringify(details, null, 2) }], details };
+	return fusionToolResult(details);
 }
 
 function classifyAllPanelFailure(failed: PanelResult[]): FusionDetails["failure_reason"] {

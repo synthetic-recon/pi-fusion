@@ -47,7 +47,7 @@ params, so the invoking model can't pick them. Effective precedence: session sel
 
 **Session state.** There is no key/value store: state is appended as custom session entries via
 `pi.appendEntry("fusion-state", …)` and read back by scanning `ctx.sessionManager.getBranch()`
-(`restoreSessionState`). The footer and `/fusion-status` derive from `effectiveDisplayState`
+(`restoreSessionState`). The footer, `/fusion-status`, `/fusion on`, forced input, and session options derive from `effectivePanel`
 (session → falls back to `fusion.json`). Modes (`available`/`forced`/`off`) live in that state.
 
 **Panel tools (multi-turn).** `tools.ts` builds tool definitions only from pi's hard-coded
