@@ -247,13 +247,10 @@ function restoreSessionState(ctx: ExtensionContext): FusionSetupState | undefine
 }
 
 /**
- * What to show in the footer/status: the session selection if present, otherwise
- * the `fusion.json` config (so a configured panel shows without running /fusion-setup).
- * Returns undefined when nothing is configured at all.
+ * Panel from fusion.json / named defaultPanel. Used by the footer and by
+ * `/fusion on` so forced mode does not require a /fusion-setup session snapshot.
  */
-function effectiveDisplayState(ctx: ExtensionContext): FusionSetupState | undefined {
-	const session = restoreSessionState(ctx);
-	if (session?.selectedIds.size || normalizeMode(session) === "off") return session;
+function configFallbackState(ctx: ExtensionContext): FusionSetupState | undefined {
 	const cfg = loadConfig(ctx.cwd, ctx.isProjectTrusted());
 	const effective = resolveEffectiveConfig(cfg);
 	if (effective.ok && ((effective.config.panel && effective.config.panel.length > 0) || effective.config.judge)) {
@@ -269,7 +266,28 @@ function effectiveDisplayState(ctx: ExtensionContext): FusionSetupState | undefi
 			footerDisplay: normalizeFooterDisplay(effective.config.footerDisplay),
 		};
 	}
-	return session;
+	return undefined;
+}
+
+/**
+ * What to show in the footer/status: the session selection if present, otherwise
+ * the `fusion.json` config (so a configured panel shows without running /fusion-setup).
+ * Returns undefined when nothing is configured at all.
+ */
+function effectiveDisplayState(ctx: ExtensionContext): FusionSetupState | undefined {
+	const session = restoreSessionState(ctx);
+	if (session?.selectedIds.size || normalizeMode(session) === "off") return session;
+	return configFallbackState(ctx) ?? session;
+}
+
+/** Session snapshot wins; otherwise the already-resolved config / defaultPanel. */
+export function resolveModeCommandPanel(
+	session: Pick<FusionSetupState, "selectedIds" | "judgeId"> | undefined,
+	configPanel: Pick<FusionSetupState, "selectedIds" | "judgeId"> | undefined,
+): { selectedIds: Set<string>; judgeId: string | undefined } | undefined {
+	if (session?.selectedIds.size) return { selectedIds: session.selectedIds, judgeId: session.judgeId };
+	if (configPanel?.selectedIds.size) return { selectedIds: configPanel.selectedIds, judgeId: configPanel.judgeId };
+	return undefined;
 }
 
 function sessionFusionOptions(ctx: ExtensionContext): FusionOptions {
@@ -481,6 +499,8 @@ export default function (pi: ExtensionAPI) {
 			}
 			const prompt = parsed.prompt;
 			const sessionState = restoreSessionState(ctx);
+			const configState = configFallbackState(ctx);
+			const modePanel = resolveModeCommandPanel(sessionState, configState);
 			const lower = prompt.toLowerCase();
 			const modeCommand: FusionMode | undefined =
 				lower === "off" || lower === "disable" || lower === "disabled"
@@ -493,22 +513,22 @@ export default function (pi: ExtensionAPI) {
 
 			if (!prompt || modeCommand) {
 				pendingPanel = undefined;
-				if (!sessionState?.selectedIds.size && (modeCommand === "forced" || (!prompt && !modeCommand))) {
+				if (!modePanel && (modeCommand === "forced" || (!prompt && !modeCommand))) {
 					const message = "No fusion setup yet. Run /fusion-setup first, or use /fusion off to disable.";
 					if (ctx.mode === "print") console.log(message);
 					else ctx.ui.notify(message, "warning");
 					return;
 				}
 
-				const selectedIds = sessionState?.selectedIds ?? new Set<string>();
-				const judgeId = sessionState?.judgeId;
+				const selectedIds = modePanel?.selectedIds ?? sessionState?.selectedIds ?? new Set<string>();
+				const judgeId = modePanel?.judgeId ?? sessionState?.judgeId;
 				const currentMode = normalizeMode(sessionState);
 				const nextMode = modeCommand ?? (currentMode === "forced" ? "available" : "forced");
-				persistSessionState(pi, selectedIds, judgeId, nextMode, sessionState ?? {});
+				persistSessionState(pi, selectedIds, judgeId, nextMode, sessionState ?? configState ?? {});
 				updateStatus(ctx, selectedIds, judgeId, nextMode);
 				const footerDisplay = effectiveFooterDisplay(ctx);
 				const summaryBase = fusionFooterText(selectedIds, judgeId, nextMode, footerDisplay) ?? modeLabel(nextMode);
-				const summary = footerDisplay === "full" ? summaryBase + toolsSuffix(sessionState) : summaryBase;
+				const summary = footerDisplay === "full" ? summaryBase + toolsSuffix(sessionState ?? configState) : summaryBase;
 				if (ctx.mode === "print") console.log(summary);
 				else ctx.ui.notify(summary, "info");
 				return;

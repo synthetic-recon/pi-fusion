@@ -45,6 +45,47 @@ test("buildRecentContextFromEntries skips tool messages", () => {
 	if (context.includes("tool output")) throw new Error("did not expect tool output");
 });
 
+test("buildRecentContextFromEntries skips prior fusion dumps", () => {
+	const dump = JSON.stringify({
+		status: "ok",
+		analysis: { consensus: ["secret-consensus"], contradictions: [], partial_coverage: [], unique_insights: [], blind_spots: [] },
+		responses: [{ model: "a/m", content: "full-panel-answer-should-not-rebroadcast" }],
+		panel_models: ["a/m"],
+	});
+	const compactDump = JSON.stringify({
+		status: "ok",
+		excerpts: [{ model: "a/m", excerpt: "excerpt-should-not-rebroadcast" }],
+		panel_models: ["a/m"],
+	});
+	const entries = [
+		msg("user", "u1"),
+		msg("assistant", dump),
+		{
+			type: "custom",
+			customType: "fusion-state",
+			data: { selectedIds: ["a/m"] },
+		},
+		{
+			type: "message",
+			message: {
+				role: "toolResult",
+				toolName: "fusion",
+				content: [{ type: "text", text: compactDump }],
+			},
+		},
+		msg("user", "u2"),
+		msg("assistant", "normal reply"),
+	];
+	const context = buildRecentContextFromEntries(entries, 2);
+	if (!context) throw new Error("expected context");
+	if (context.includes("secret-consensus")) throw new Error("did not expect analysis dump");
+	if (context.includes("full-panel-answer-should-not-rebroadcast")) throw new Error("did not expect full panel dump");
+	if (context.includes("excerpt-should-not-rebroadcast")) throw new Error("did not expect compact tool dump");
+	if (context.includes("a/m")) throw new Error("did not expect fusion-state ids");
+	if (!context.includes("User: u1") || !context.includes("User: u2")) throw new Error("expected real user turns");
+	if (!context.includes("Assistant: normal reply")) throw new Error("expected non-dump assistant reply");
+});
+
 test("buildFusionTaskText wraps context and current task", () => {
 	const task = buildFusionTaskText("Decide", "User: prior");
 	if (!task.includes("Recent conversation context:")) throw new Error("missing context heading");

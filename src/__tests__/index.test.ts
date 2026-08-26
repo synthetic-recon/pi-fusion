@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test, eq, fakeModel } from "./_harness.ts";
 import registerFusionExtension, {
 	activatePendingPanel,
@@ -8,6 +11,7 @@ import registerFusionExtension, {
 	fusionFooterText,
 	normalizeFooterDisplay,
 	parsePanelCommand,
+	resolveModeCommandPanel,
 } from "../index.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PendingPanelSelection } from "../index.ts";
@@ -70,6 +74,60 @@ test("fusion tool schema exposes only prompt and context controls", () => {
 	);
 });
 
+test("/fusion on uses fusion.json / defaultPanel when session has no selectedIds", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-fusion-on-"));
+	mkdirSync(join(cwd, ".pi"));
+	writeFileSync(join(cwd, ".pi", "fusion.json"), JSON.stringify({
+		defaultPanel: "quality",
+		panels: {
+			quality: {
+				models: ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"],
+				judge: "anthropic/claude-opus-4-5",
+			},
+		},
+	}));
+
+	const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
+	let persisted: { selectedIds?: string[]; mode?: string; judgeId?: string } | undefined;
+	registerFusionExtension({
+		registerTool() {},
+		registerCommand(name: string, spec: { handler: (args: string, ctx: unknown) => Promise<void> }) {
+			commands.set(name, spec);
+		},
+		on() {},
+		appendEntry(_type: string, data: { selectedIds?: string[]; mode?: string; judgeId?: string }) {
+			persisted = data;
+		},
+		getThinkingLevel: () => "off",
+	} as never);
+
+	const logs: string[] = [];
+	const orig = console.log;
+	console.log = (msg?: unknown) => {
+		logs.push(String(msg ?? ""));
+	};
+	try {
+		const handler = commands.get("fusion")?.handler;
+		if (!handler) throw new Error("expected /fusion command");
+		await handler("on", {
+			cwd,
+			isProjectTrusted: () => true,
+			mode: "print",
+			sessionManager: { getBranch: () => [] },
+			ui: { notify() {}, setStatus() {} },
+		});
+		if (logs.some((line) => line.includes("No fusion setup"))) {
+			throw new Error(`forced mode rejected config panel: ${logs.join(" | ")}`);
+		}
+		eq(persisted?.mode, "forced", "persisted forced mode");
+		eq(persisted?.selectedIds, ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"], "persisted defaultPanel");
+		eq(persisted?.judgeId, "anthropic/claude-opus-4-5", "persisted defaultPanel judge");
+	} finally {
+		console.log = orig;
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("pending panel is session-bound, agent-bound, and consumed once", () => {
 	let pending: PendingPanelSelection | undefined = armPendingPanel("fast", "session-a");
 	eq(consumePendingPanel(pending, "session-a"), { panelName: undefined, pending }, "not consumed before agent start");
@@ -111,6 +169,19 @@ test("fusionFooterText supports full, compact, and off display modes", () => {
 test("fusionFooterText hides footer text when panel is empty", () => {
 	eq(fusionFooterText(new Set(), undefined, "available", "full"), undefined, "available mode with no panel hides text");
 	eq(fusionFooterText(new Set(), undefined, "off", "full"), "Fusion off", "off mode still reports disabled state");
+});
+
+test("resolveModeCommandPanel uses config / defaultPanel when session has no snapshot", () => {
+	const config = { selectedIds: new Set(["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"]), judgeId: "anthropic/claude-opus-4-5" };
+	const fromConfig = resolveModeCommandPanel({ selectedIds: new Set(), judgeId: undefined }, config);
+	eq(fromConfig?.judgeId, "anthropic/claude-opus-4-5", "config judge used");
+	eq([...(fromConfig?.selectedIds ?? [])], ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"], "config panel used");
+
+	const session = { selectedIds: new Set(["session/panel"]), judgeId: "session/judge" };
+	const fromSession = resolveModeCommandPanel(session, config);
+	eq([...(fromSession?.selectedIds ?? [])], ["session/panel"], "session snapshot wins when present");
+
+	eq(resolveModeCommandPanel({ selectedIds: new Set(), judgeId: undefined }, { selectedIds: new Set(), judgeId: undefined }), undefined, "empty session and config cannot arm forced");
 });
 
 function fakeContext(branch: unknown[] = []): ExtensionContext {

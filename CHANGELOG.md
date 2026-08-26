@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `/fusion on` (and the bare toggle into forced) now uses the already-resolved panel from `fusion.json` / `defaultPanel` when the session has no `/fusion-setup` snapshot.
+- The `fusion` tool result returns analysis plus short excerpts instead of every full panel answer. Full panel text remains on `/fusion-report`. Unparseable or failed judge output is surfaced as a warning and `failure_reason` instead of a silent missing analysis.
+- `context_mode=recent` skips prior fusion-state entries, fusion tool-result JSON, and assistant blobs that are fusion details so panelists are not rebroadcast the last dump.
+
 ## 0.9.0
 
 - Resolved the `brace-expansion` and `protobufjs` denial-of-service advisories in the development dependency tree by pinning their patched transitive releases.
