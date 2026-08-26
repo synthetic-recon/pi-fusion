@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.1
+
 - `/fusion on` (and the bare toggle into forced) now uses the already-resolved panel from `fusion.json` / `defaultPanel` when the session has no `/fusion-setup` snapshot. Forced mode writes `mode` only; config stays the panel source until `/fusion-setup`.
 - The `fusion` tool result returns analysis plus short excerpts instead of every full panel answer. A single unjudged panel response is still returned in full. Full multi-panel text remains on `/fusion-report`. Unparseable or failed judge output is surfaced as a warning and `failure_reason` instead of a silent missing analysis. Empty/`{foo:1}` judge objects are not treated as analysis.
 - `context_mode=recent` skips prior fusion-state entries, fusion tool-result JSON, and assistant blobs that are fusion details so panelists are not rebroadcast the last dump.
