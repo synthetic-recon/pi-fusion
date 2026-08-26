@@ -86,6 +86,13 @@ test("buildRecentContextFromEntries skips prior fusion dumps", () => {
 	if (!context.includes("Assistant: normal reply")) throw new Error("expected non-dump assistant reply");
 });
 
+test("buildRecentContextFromEntries keeps a reply that only quotes analysis JSON", () => {
+	const quoted = 'Example shape: {"status":"ok","analysis":{"consensus":["quoted-example"]}}';
+	const context = buildRecentContextFromEntries([msg("user", "u1"), msg("assistant", quoted)], 1);
+	if (!context) throw new Error("expected context");
+	if (!context.includes("quoted-example")) throw new Error("quoted analysis example should not drop the turn");
+});
+
 test("buildFusionTaskText wraps context and current task", () => {
 	const task = buildFusionTaskText("Decide", "User: prior");
 	if (!task.includes("Recent conversation context:")) throw new Error("missing context heading");

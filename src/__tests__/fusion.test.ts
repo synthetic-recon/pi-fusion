@@ -22,6 +22,9 @@ test("parseFusionAnalysis defaults missing arrays to empty", () => {
 	}, "missing arrays default to []");
 	eq(parseFusionAnalysis("not an object"), undefined, "non-object is unparseable");
 	eq(parseFusionAnalysis(undefined), undefined, "missing JSON is unparseable");
+	eq(parseFusionAnalysis({}), undefined, "empty object is not analysis");
+	eq(parseFusionAnalysis({ foo: 1 }), undefined, "unrelated object is not analysis");
+	eq(parseFusionAnalysis({ consensus: "string" }), undefined, "non-array analysis key is not analysis");
 });
 
 test("compactFusionToolText returns analysis plus excerpts, not full panel text", () => {
@@ -37,6 +40,17 @@ test("compactFusionToolText returns analysis plus excerpts, not full panel text"
 	if (!text.includes("excerpts")) throw new Error("expected excerpts key");
 	if (text.includes(long)) throw new Error("tool result must not include full panel answer");
 	if (!text.includes("…")) throw new Error("expected truncated excerpt");
+});
+
+test("compactFusionToolText passes through a lone unjudged panel response", () => {
+	const long = "PANEL-FULL-".repeat(80);
+	const text = compactFusionToolText({
+		status: "ok",
+		responses: [{ model: "a/m", content: long }],
+		panel_models: ["a/m"],
+		judge_model: "a/j",
+	});
+	if (!text.includes(long)) throw new Error("single unjudged response must be returned in full");
 });
 
 test("emptyPanelError treats non-empty content as success", () => {
@@ -337,6 +351,9 @@ test("single panel success skips unsupported max judge without warning", async (
 		eq(seen, ["panel"], "judge provider is never called");
 		eq(result.details.judge_reasoning, undefined, "skipped judge has no reasoning diagnostics");
 		eq(result.details.warnings, undefined, "skipped unsupported judge does not warn");
+		if (!result.content[0]?.text.includes("only panel answer")) {
+			throw new Error("single unjudged panel answer must pass through the tool result");
+		}
 	} finally {
 		registration.unregister();
 		rmSync(cwd, { recursive: true, force: true });

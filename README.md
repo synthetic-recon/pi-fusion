@@ -33,7 +33,7 @@ When the `fusion` tool runs, pi:
    - **partial_coverage**: points only some models raised
    - **unique_insights**: ideas raised by a single model
    - **blind_spots**: topics no panel model addressed
-4. Your active model receives the analysis plus short excerpts of each panel answer and writes the final answer. Full panel/judge text stays in `/fusion-report`.
+4. Your active model receives the analysis plus short excerpts of each panel answer and writes the final answer. If only one panel model succeeds, that full response is returned directly. Full multi-panel text stays in `/fusion-report`.
 
 When two or more panel models answer, the judge synthesis runs. If only one model succeeds, the single response is returned directly (no synthesis).
 

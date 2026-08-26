@@ -10,20 +10,16 @@ const MAX_CONTEXT_CHARS = 20000;
 
 export type FusionContextMode = "none" | "recent";
 
-/** Prior fusion-state, tool-result JSON, or assistant blobs that are fusion details. */
+/** Prior fusion-state or a dump that has panel bodies plus panel_models. */
 export function isFusionDumpText(text: string): boolean {
 	const parsed = extractJson<Record<string, unknown>>(text);
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
 	if (parsed.status !== "ok" && parsed.status !== "error") return false;
-	return "responses" in parsed || "excerpts" in parsed || "analysis" in parsed || "panel_models" in parsed;
+	return ("responses" in parsed || "excerpts" in parsed) && "panel_models" in parsed;
 }
 
-function isFusionDumpEntry(entry: { type?: unknown; customType?: unknown; message?: { role?: unknown; toolName?: unknown } }): boolean {
-	if (entry.customType === "fusion-state") return true;
-	const role = entry.message?.role;
-	if (role === "toolResult" || role === "tool") return true;
-	if (entry.message?.toolName === "fusion") return true;
-	return false;
+function isFusionDumpEntry(entry: { customType?: unknown }): boolean {
+	return entry.customType === "fusion-state";
 }
 
 export function normalizeContextTurns(value: number | undefined): number {

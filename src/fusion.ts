@@ -49,10 +49,13 @@ import type {
 /** Short excerpt budget for the tool result (full text stays on `details` for /fusion-report). */
 const TOOL_RESULT_EXCERPT_BYTES = 480;
 
+const ANALYSIS_KEYS = ["consensus", "contradictions", "partial_coverage", "unique_insights", "blind_spots"] as const;
+
 /** Accept judge JSON as FusionAnalysis; missing arrays default to []. */
 export function parseFusionAnalysis(value: unknown): FusionAnalysis | undefined {
 	if (value == null || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const obj = value as Record<string, unknown>;
+	if (!ANALYSIS_KEYS.some((key) => Array.isArray(obj[key]))) return undefined;
 	return {
 		consensus: Array.isArray(obj.consensus) ? obj.consensus : [],
 		contradictions: Array.isArray(obj.contradictions) ? obj.contradictions : [],
@@ -64,13 +67,14 @@ export function parseFusionAnalysis(value: unknown): FusionAnalysis | undefined 
 
 /** Tool-visible payload: analysis + short excerpts. Full panel/judge text stays on `details`. */
 export function compactFusionToolText(details: FusionDetails): string {
+	const passThroughSingle = details.responses.length === 1 && !details.analysis;
 	return JSON.stringify(
 		{
 			status: details.status,
 			analysis: details.analysis,
 			excerpts: details.responses.map((r) => ({
 				model: r.model,
-				excerpt: truncateToBytes(r.content, TOOL_RESULT_EXCERPT_BYTES, "…"),
+				excerpt: passThroughSingle ? r.content : truncateToBytes(r.content, TOOL_RESULT_EXCERPT_BYTES, "…"),
 				...(r.tools ? { tools: r.tools } : {}),
 			})),
 			...(details.failed_models ? { failed_models: details.failed_models } : {}),

@@ -11,7 +11,6 @@ import registerFusionExtension, {
 	fusionFooterText,
 	normalizeFooterDisplay,
 	parsePanelCommand,
-	resolveModeCommandPanel,
 } from "../index.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PendingPanelSelection } from "../index.ts";
@@ -120,10 +119,55 @@ test("/fusion on uses fusion.json / defaultPanel when session has no selectedIds
 			throw new Error(`forced mode rejected config panel: ${logs.join(" | ")}`);
 		}
 		eq(persisted?.mode, "forced", "persisted forced mode");
-		eq(persisted?.selectedIds, ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"], "persisted defaultPanel");
-		eq(persisted?.judgeId, "anthropic/claude-opus-4-5", "persisted defaultPanel judge");
+		eq(persisted?.selectedIds, [], "config stays the panel source until /fusion-setup");
+		if (!logs.some((line) => line.includes("Fusion forced") && line.includes("2 panel"))) {
+			throw new Error(`expected forced footer from defaultPanel: ${logs.join(" | ")}`);
+		}
 	} finally {
 		console.log = orig;
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("forced input uses fusion.json when session stored mode only", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "pi-fusion-input-"));
+	mkdirSync(join(cwd, ".pi"));
+	writeFileSync(join(cwd, ".pi", "fusion.json"), JSON.stringify({
+		panel: ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"],
+		judge: "anthropic/claude-opus-4-5",
+	}));
+
+	type EventHandler = (event: unknown, ctx: unknown) => unknown | Promise<unknown>;
+	const handlers = new Map<string, EventHandler>();
+	registerFusionExtension({
+		registerTool() {},
+		registerCommand() {},
+		on(event: string, handler: EventHandler) {
+			handlers.set(event, handler);
+		},
+		getThinkingLevel: () => "off",
+	} as never);
+
+	try {
+		const input = handlers.get("input");
+		if (!input) throw new Error("expected input handler");
+		const result = await input(
+			{ source: "user", text: "hello", images: undefined },
+			{
+				cwd,
+				isProjectTrusted: () => true,
+				sessionManager: {
+					getBranch: () => [{
+						type: "custom",
+						customType: "fusion-state",
+						data: { selectedIds: [], mode: "forced" },
+					}],
+				},
+				ui: { setStatus() {} },
+			},
+		);
+		eq((result as { action?: string }).action, "transform", "forced mode with config panel transforms input");
+	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
@@ -169,19 +213,6 @@ test("fusionFooterText supports full, compact, and off display modes", () => {
 test("fusionFooterText hides footer text when panel is empty", () => {
 	eq(fusionFooterText(new Set(), undefined, "available", "full"), undefined, "available mode with no panel hides text");
 	eq(fusionFooterText(new Set(), undefined, "off", "full"), "Fusion off", "off mode still reports disabled state");
-});
-
-test("resolveModeCommandPanel uses config / defaultPanel when session has no snapshot", () => {
-	const config = { selectedIds: new Set(["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"]), judgeId: "anthropic/claude-opus-4-5" };
-	const fromConfig = resolveModeCommandPanel({ selectedIds: new Set(), judgeId: undefined }, config);
-	eq(fromConfig?.judgeId, "anthropic/claude-opus-4-5", "config judge used");
-	eq([...(fromConfig?.selectedIds ?? [])], ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"], "config panel used");
-
-	const session = { selectedIds: new Set(["session/panel"]), judgeId: "session/judge" };
-	const fromSession = resolveModeCommandPanel(session, config);
-	eq([...(fromSession?.selectedIds ?? [])], ["session/panel"], "session snapshot wins when present");
-
-	eq(resolveModeCommandPanel({ selectedIds: new Set(), judgeId: undefined }, { selectedIds: new Set(), judgeId: undefined }), undefined, "empty session and config cannot arm forced");
 });
 
 function fakeContext(branch: unknown[] = []): ExtensionContext {
