@@ -35,8 +35,6 @@ When the `fusion` tool runs, pi:
    - **blind_spots**: topics no panel model addressed
 4. Your active model receives the analysis plus short excerpts of each panel answer and writes the final answer. If only one panel model succeeds, that full response is returned directly. Full multi-panel text stays in `/fusion-report`.
 
-When two or more panel models answer, the judge synthesis runs. If only one model succeeds, the single response is returned directly (no synthesis).
-
 ## Install
 
 ```bash
@@ -59,7 +57,7 @@ There's no build step; pi loads the TypeScript directly via [jiti](https://githu
 Use fusion to compare REST vs GraphQL for a new public API.
 
 # 3. or force every prompt through fusion for the session
-/fusion on
+/fusion on   # needs fusion.json / defaultPanel / /fusion-setup; auto-select is not enough
 ```
 
 Check what's active any time with `/fusion-status`.
@@ -230,7 +228,7 @@ Yes. `/fusion-setup` and the stateful `/fusion --panel` form are interactive-onl
 | Command | What it does |
 |---------|--------------|
 | `/fusion-setup` | Load a named panel or customize a panel snapshot, judge, reasoning, tools, and Fusion status display (interactive mode only). |
-| `/fusion on` \| `available` \| `off` | Set the session mode (aliases: `forced`, `auto`, `disable`). |
+| `/fusion on` \| `available` \| `off` | Set the session mode (aliases: `forced`, `auto`, `disable`). `/fusion on` uses `fusion.json` / `defaultPanel` when there is no `/fusion-setup` snapshot. |
 | `/fusion` | With no argument, toggle between `available` and `forced`. |
 | `/fusion <prompt>` | Force fusion for a single prompt, then answer normally. |
 | `/fusion --panel <name> <prompt>` | Use a named panel for this interactive agent run only, then return to the prior selection. |
