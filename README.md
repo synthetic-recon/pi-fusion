@@ -1,10 +1,3 @@
-<p align="center">
-  <img alt="NPM Downloads" src="https://img.shields.io/npm/dw/pi-fusion">
-</p>
-<p align="center">
-  <img src="https://raw.githubusercontent.com/synthetic-recon/pi-fusion/main/assets/fusion.png" alt="pi-fusion" width="520">
-</p>
-
 # pi-fusion
 
 Multi-model deliberation for [pi](https://pi.dev/), inspired by [OpenRouter Fusion](https://openrouter.ai/blog/announcements/fusion-beats-frontier/).
