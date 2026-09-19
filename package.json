@@ -54,6 +54,9 @@
     "typebox": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
     "jiti": "^2.4.0",
     "typescript": "^5.5.0"
   }

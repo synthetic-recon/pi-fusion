@@ -8,6 +8,7 @@ import {
 	type AssistantMessage,
 	type Message,
 	type Model,
+	type ProviderHeaders,
 	type Tool,
 	type ToolCall,
 	type ToolResultMessage,
@@ -24,7 +25,7 @@ type ToolContent = ToolResultMessage["content"];
 
 type CompleteOptions = {
 	apiKey: string;
-	headers?: Record<string, string>;
+	headers?: ProviderHeaders;
 	signal?: AbortSignal;
 	maxTokens: number;
 	temperature?: number;
