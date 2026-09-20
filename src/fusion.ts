@@ -55,13 +55,24 @@ const ANALYSIS_KEYS = ["consensus", "contradictions", "partial_coverage", "uniqu
 export function parseFusionAnalysis(value: unknown): FusionAnalysis | undefined {
 	if (value == null || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const obj = value as Record<string, unknown>;
-	if (!ANALYSIS_KEYS.some((key) => Array.isArray(obj[key]))) return undefined;
+	const normalized: Record<string, unknown> = { ...obj };
+	// Some judges camelCase despite the prompt.
+	if (!Array.isArray(normalized.partial_coverage) && Array.isArray(normalized.partialCoverage)) {
+		normalized.partial_coverage = normalized.partialCoverage;
+	}
+	if (!Array.isArray(normalized.unique_insights) && Array.isArray(normalized.uniqueInsights)) {
+		normalized.unique_insights = normalized.uniqueInsights;
+	}
+	if (!Array.isArray(normalized.blind_spots) && Array.isArray(normalized.blindSpots)) {
+		normalized.blind_spots = normalized.blindSpots;
+	}
+	if (!ANALYSIS_KEYS.some((key) => Array.isArray(normalized[key]))) return undefined;
 	return {
-		consensus: Array.isArray(obj.consensus) ? obj.consensus : [],
-		contradictions: Array.isArray(obj.contradictions) ? obj.contradictions : [],
-		partial_coverage: Array.isArray(obj.partial_coverage) ? obj.partial_coverage : [],
-		unique_insights: Array.isArray(obj.unique_insights) ? obj.unique_insights : [],
-		blind_spots: Array.isArray(obj.blind_spots) ? obj.blind_spots : [],
+		consensus: Array.isArray(normalized.consensus) ? normalized.consensus : [],
+		contradictions: Array.isArray(normalized.contradictions) ? normalized.contradictions : [],
+		partial_coverage: Array.isArray(normalized.partial_coverage) ? normalized.partial_coverage : [],
+		unique_insights: Array.isArray(normalized.unique_insights) ? normalized.unique_insights : [],
+		blind_spots: Array.isArray(normalized.blind_spots) ? normalized.blind_spots : [],
 	};
 }
 
@@ -412,18 +423,15 @@ export async function runFusion(
 				.join("\n\n");
 
 		try {
-			const judgeResponse = await callModelText(
+			analysis = await runJudgeAnalysis(
 				registry,
 				judge,
-				JUDGE_SYSTEM_PROMPT,
 				judgeUserText,
 				maxCompletionTokens,
 				temperature,
 				signal,
 				judgeReasoning.effective,
 			);
-			const judgeText = getTextContent(judgeResponse);
-			analysis = parseFusionAnalysis(extractJson(judgeText));
 			if (!analysis) {
 				warnings.push("Judge returned unparseable JSON; analysis is unavailable. Use /fusion-report for raw panel text.");
 				judgeFailureReason = "unexpected_error";
@@ -455,6 +463,42 @@ export async function runFusion(
 	};
 
 	return fusionToolResult(details);
+}
+
+const JUDGE_RETRY_SYSTEM_PROMPT = `${JUDGE_SYSTEM_PROMPT}
+
+CRITICAL: Output must be exactly one JSON object and nothing else — no markdown fences, no commentary, no text before or after the JSON.`;
+
+async function runJudgeAnalysis(
+	registry: ModelRegistry,
+	judge: Model<Api>,
+	judgeUserText: string,
+	maxCompletionTokens: number,
+	temperature: number,
+	signal: AbortSignal | undefined,
+	reasoning?: ThinkingLevel,
+): Promise<FusionAnalysis | undefined> {
+	for (const spec of [
+		{ systemPrompt: JUDGE_SYSTEM_PROMPT, reasoning },
+		{ systemPrompt: JUDGE_RETRY_SYSTEM_PROMPT, reasoning: undefined as ThinkingLevel | undefined },
+	] satisfies Array<{ systemPrompt: string; reasoning?: ThinkingLevel }>) {
+		// Some providers (e.g. cursor-agent) run behind a hosted agent backend that
+		// replaces the client-supplied system prompt, so the JSON contract must
+		// also travel in the user message to reach the model reliably.
+		const judgeResponse = await callModelText(
+			registry,
+			judge,
+			spec.systemPrompt,
+			`${spec.systemPrompt}\n\n${judgeUserText}`,
+			maxCompletionTokens,
+			temperature,
+			signal,
+			spec.reasoning,
+		);
+		const analysis = parseFusionAnalysis(extractJson(getTextContent(judgeResponse)));
+		if (analysis) return analysis;
+	}
+	return undefined;
 }
 
 function classifyAllPanelFailure(failed: PanelResult[]): FusionDetails["failure_reason"] {

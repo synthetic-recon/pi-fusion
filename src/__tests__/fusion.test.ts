@@ -378,7 +378,9 @@ test("runFusion surfaces judge JSON failure instead of silent ok analysis", asyn
 	registration.setResponses([
 		() => fauxAssistantMessage("first panel answer that is long enough to be excerpted in the tool result"),
 		() => fauxAssistantMessage("second panel answer that is long enough to be excerpted in the tool result"),
+		// The judge is retried once with a stricter prompt, so queue two non-JSON replies.
 		() => fauxAssistantMessage("the judge said words but not JSON"),
+		() => fauxAssistantMessage("still words, still not JSON"),
 	]);
 
 	const cwd = trustedProjectConfig();

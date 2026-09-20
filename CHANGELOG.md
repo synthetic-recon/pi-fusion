@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Clarified README and the `/fusion on` empty-panel message: forced mode needs a resolvable panel from `fusion.json` / `defaultPanel` / `/fusion-setup`, not auto-select.
+- Panel and judge calls now route through pi's model registry when available (pi ≥ 0.85), so provider-extension models (e.g. cursor-agent) work in fusion panels. Each call also gets a unique provider session id, keeping session-scoped providers from sharing conversation state between panelists and the judge. Older pi versions keep the existing direct completion path.
+- Judge JSON parsing tolerates camelCased keys, trailing commas, and prose around the JSON object, and an unparseable judge is retried once with a stricter JSON-only instruction carried in the user message.
 
 ## 0.9.1
 

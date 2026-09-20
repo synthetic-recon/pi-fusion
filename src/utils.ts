@@ -44,30 +44,36 @@ export function truncateToBytes(text: string, maxBytes: number, suffix = ""): st
 }
 
 export function extractJson<T>(text: string): T | undefined {
-	// First try the whole thing.
+	const trimmed = text.trim();
+	if (!trimmed) return undefined;
+
+	const attempts = [trimmed];
+	const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+	if (fenced?.[1]) attempts.push(fenced[1].trim());
+
+	// Prefer the last top-level object when the model adds prose before/after JSON.
+	const objects = [...trimmed.matchAll(/\{[\s\S]*\}/g)].map((m) => m[0]);
+	if (objects.length > 0) attempts.push(objects.at(-1)!);
+
+	for (const candidate of attempts) {
+		const parsed = tryParseJson<T>(candidate);
+		if (parsed !== undefined) return parsed;
+	}
+	return undefined;
+}
+
+function tryParseJson<T>(text: string): T | undefined {
 	try {
 		return JSON.parse(text) as T;
 	} catch {
-		// ignore
-	}
-
-	// Try to extract from markdown fences.
-	const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-	if (fenced && fenced[1]) {
-		try {
-			return JSON.parse(fenced[1]) as T;
-		} catch {
-			// ignore
-		}
-	}
-
-	// Fall back to first { ... } block.
-	const brace = text.match(/\{[\s\S]*\}/);
-	if (brace) {
-		try {
-			return JSON.parse(brace[0]) as T;
-		} catch {
-			// ignore
+		// Common judge slip: trailing commas before } or ].
+		const relaxed = text.replace(/,\s*([}\]])/g, "$1");
+		if (relaxed !== text) {
+			try {
+				return JSON.parse(relaxed) as T;
+			} catch {
+				// ignore
+			}
 		}
 	}
 	return undefined;
