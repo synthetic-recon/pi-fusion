@@ -423,3 +423,79 @@ test("runFusion surfaces judge JSON failure instead of silent ok analysis", asyn
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
+
+test("judge retry keeps configured reasoning and carries the strict JSON instruction", async () => {
+	const unique = Math.random().toString(36).slice(2);
+	const provider = `fusion-judge-retry-${unique}`;
+	const registration = registerFauxProvider({
+		api: `fusion-judge-retry-api-${unique}`,
+		provider,
+		models: [
+			{ id: "panel-a" },
+			{ id: "panel-b" },
+			{ id: "judge", reasoning: true },
+		],
+	});
+	const panelA = registration.getModel("panel-a") as Model<Api>;
+	const panelB = registration.getModel("panel-b") as Model<Api>;
+	const judge = registration.getModel("judge") as Model<Api>;
+	judge.thinkingLevelMap = { high: "high" };
+
+	const judgeCalls: Array<{ reasoning: ThinkingLevel | undefined; userText: string }> = [];
+	const recordJudge = (text: string) => (
+		context: { messages: Array<{ content: unknown }> },
+		options: unknown,
+	) => {
+		judgeCalls.push({
+			reasoning: (options as { reasoning?: ThinkingLevel } | undefined)?.reasoning,
+			userText: String(context.messages[0]?.content ?? ""),
+		});
+		return fauxAssistantMessage(text);
+	};
+	registration.setResponses([
+		() => fauxAssistantMessage("first panel answer"),
+		() => fauxAssistantMessage("second panel answer"),
+		recordJudge("I think they mostly agree."),
+		recordJudge(JSON.stringify({ consensus: ["both agree"] })),
+	] as any);
+
+	const cwd = trustedProjectConfig();
+	const registry = {
+		...registryFor([panelA, panelB, judge]),
+		async getApiKeyAndHeaders() {
+			return { ok: true, apiKey: "test" };
+		},
+	} as any;
+
+	try {
+		const result = await runFusion(
+			cwd,
+			registry,
+			undefined,
+			"compare",
+			true,
+			{
+				analysis_models: [`${provider}/panel-a`, `${provider}/panel-b`],
+				model: `${provider}/judge`,
+				judge_reasoning: "high",
+			},
+			{} as any,
+			false,
+			undefined,
+		);
+
+		eq(judgeCalls.map((c) => c.reasoning), ["high", "high"], "both judge attempts receive the configured level");
+		if (judgeCalls[0]?.userText.includes("CRITICAL: Output must be exactly one JSON object")) {
+			throw new Error("first judge attempt should use the normal prompt");
+		}
+		if (!judgeCalls[1]?.userText.includes("CRITICAL: Output must be exactly one JSON object")) {
+			throw new Error("retry user message must carry the strict JSON instruction");
+		}
+		eq(result.details.analysis?.consensus, ["both agree"], "retry analysis is used");
+		eq(result.details.judge_reasoning, { requested: "high", effective: "high" }, "diagnostics match what was sent");
+		eq(result.details.failure_reason, undefined, "successful retry is not a failure");
+	} finally {
+		registration.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});

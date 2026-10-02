@@ -2,8 +2,8 @@
  * Tests for pi-fusion utilities.
  */
 
-import { extractJson, mapWithConcurrencyLimit, truncateToBytes } from "../utils.ts";
-import { test } from "./_harness.ts";
+import { extractJson, mapWithConcurrencyLimit, stripTrailingCommas, truncateToBytes } from "../utils.ts";
+import { eq, test } from "./_harness.ts";
 
 test("extractJson parses plain JSON", () => {
 	const result = extractJson<{ ok: boolean }>('{"ok":true}');
@@ -18,6 +18,26 @@ test("extractJson parses fenced JSON", () => {
 test("extractJson returns undefined for invalid text", () => {
 	const result = extractJson<{ ok: boolean }>("not json");
 	if (result !== undefined) throw new Error("expected undefined");
+});
+
+test("extractJson repairs object and array trailing commas", () => {
+	eq(extractJson('{"a":1,}'), { a: 1 }, "object trailing comma");
+	eq(extractJson('{"a":[1,2,\n],\n}'), { a: [1, 2] }, "array and object trailing commas with whitespace");
+	eq(extractJson('Here you go:\n{"consensus":["x"],}\nThanks!'), { consensus: ["x"] }, "prose around repaired JSON");
+});
+
+test("extractJson trailing-comma repair preserves string contents", () => {
+	eq(
+		extractJson('{"consensus":["Keep literal ,} text", "and ,] too"],}'),
+		{ consensus: ["Keep literal ,} text", "and ,] too"] },
+		"delimiter text inside strings is untouched",
+	);
+	eq(
+		extractJson('{"q":"say \\",}\\" and \\\\",}'),
+		{ q: 'say ",}" and \\' },
+		"escaped quotes and backslashes do not end the string early",
+	);
+	eq(stripTrailingCommas('{"a":"x, }"}'), '{"a":"x, }"}', "valid JSON with comma text in a string is unchanged");
 });
 
 test("mapWithConcurrencyLimit runs all tasks", async () => {

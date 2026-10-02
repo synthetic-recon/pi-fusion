@@ -51,9 +51,9 @@ export function extractJson<T>(text: string): T | undefined {
 	const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
 	if (fenced?.[1]) attempts.push(fenced[1].trim());
 
-	// Prefer the last top-level object when the model adds prose before/after JSON.
-	const objects = [...trimmed.matchAll(/\{[\s\S]*\}/g)].map((m) => m[0]);
-	if (objects.length > 0) attempts.push(objects.at(-1)!);
+	// Fall back to the outermost { ... } span when the model adds prose before/after JSON.
+	const brace = trimmed.match(/\{[\s\S]*\}/);
+	if (brace) attempts.push(brace[0]);
 
 	for (const candidate of attempts) {
 		const parsed = tryParseJson<T>(candidate);
@@ -67,7 +67,7 @@ function tryParseJson<T>(text: string): T | undefined {
 		return JSON.parse(text) as T;
 	} catch {
 		// Common judge slip: trailing commas before } or ].
-		const relaxed = text.replace(/,\s*([}\]])/g, "$1");
+		const relaxed = stripTrailingCommas(text);
 		if (relaxed !== text) {
 			try {
 				return JSON.parse(relaxed) as T;
@@ -77,4 +77,28 @@ function tryParseJson<T>(text: string): T | undefined {
 		}
 	}
 	return undefined;
+}
+
+/** Drop commas that precede `}` / `]`, skipping string literals so their contents are untouched. */
+export function stripTrailingCommas(text: string): string {
+	let out = "";
+	let inString = false;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i]!;
+		if (inString) {
+			out += ch;
+			if (ch === "\\") out += text[++i] ?? "";
+			else if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+		} else if (ch === ",") {
+			let j = i + 1;
+			while (j < text.length && /\s/.test(text[j]!)) j++;
+			if (text[j] === "}" || text[j] === "]") continue;
+		}
+		out += ch;
+	}
+	return out;
 }

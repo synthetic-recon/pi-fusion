@@ -478,22 +478,20 @@ async function runJudgeAnalysis(
 	signal: AbortSignal | undefined,
 	reasoning?: ThinkingLevel,
 ): Promise<FusionAnalysis | undefined> {
-	for (const spec of [
-		{ systemPrompt: JUDGE_SYSTEM_PROMPT, reasoning },
-		{ systemPrompt: JUDGE_RETRY_SYSTEM_PROMPT, reasoning: undefined as ThinkingLevel | undefined },
-	] satisfies Array<{ systemPrompt: string; reasoning?: ThinkingLevel }>) {
+	// Both attempts keep the resolved judge reasoning so judge_reasoning diagnostics stay truthful.
+	for (const systemPrompt of [JUDGE_SYSTEM_PROMPT, JUDGE_RETRY_SYSTEM_PROMPT]) {
 		// Some providers (e.g. cursor-agent) run behind a hosted agent backend that
 		// replaces the client-supplied system prompt, so the JSON contract must
 		// also travel in the user message to reach the model reliably.
 		const judgeResponse = await callModelText(
 			registry,
 			judge,
-			spec.systemPrompt,
-			`${spec.systemPrompt}\n\n${judgeUserText}`,
+			systemPrompt,
+			`${systemPrompt}\n\n${judgeUserText}`,
 			maxCompletionTokens,
 			temperature,
 			signal,
-			spec.reasoning,
+			reasoning,
 		);
 		const analysis = parseFusionAnalysis(extractJson(getTextContent(judgeResponse)));
 		if (analysis) return analysis;
