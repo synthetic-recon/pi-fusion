@@ -44,31 +44,61 @@ export function truncateToBytes(text: string, maxBytes: number, suffix = ""): st
 }
 
 export function extractJson<T>(text: string): T | undefined {
-	// First try the whole thing.
+	const trimmed = text.trim();
+	if (!trimmed) return undefined;
+
+	const attempts = [trimmed];
+	const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+	if (fenced?.[1]) attempts.push(fenced[1].trim());
+
+	// Fall back to the outermost { ... } span when the model adds prose before/after JSON.
+	const brace = trimmed.match(/\{[\s\S]*\}/);
+	if (brace) attempts.push(brace[0]);
+
+	for (const candidate of attempts) {
+		const parsed = tryParseJson<T>(candidate);
+		if (parsed !== undefined) return parsed;
+	}
+	return undefined;
+}
+
+function tryParseJson<T>(text: string): T | undefined {
 	try {
 		return JSON.parse(text) as T;
 	} catch {
-		// ignore
-	}
-
-	// Try to extract from markdown fences.
-	const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-	if (fenced && fenced[1]) {
-		try {
-			return JSON.parse(fenced[1]) as T;
-		} catch {
-			// ignore
-		}
-	}
-
-	// Fall back to first { ... } block.
-	const brace = text.match(/\{[\s\S]*\}/);
-	if (brace) {
-		try {
-			return JSON.parse(brace[0]) as T;
-		} catch {
-			// ignore
+		// Common judge slip: trailing commas before } or ].
+		const relaxed = stripTrailingCommas(text);
+		if (relaxed !== text) {
+			try {
+				return JSON.parse(relaxed) as T;
+			} catch {
+				// ignore
+			}
 		}
 	}
 	return undefined;
+}
+
+/** Drop commas that precede `}` / `]`, skipping string literals so their contents are untouched. */
+export function stripTrailingCommas(text: string): string {
+	let out = "";
+	let inString = false;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i]!;
+		if (inString) {
+			out += ch;
+			if (ch === "\\") out += text[++i] ?? "";
+			else if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+		} else if (ch === ",") {
+			let j = i + 1;
+			while (j < text.length && /\s/.test(text[j]!)) j++;
+			if (text[j] === "}" || text[j] === "]") continue;
+		}
+		out += ch;
+	}
+	return out;
 }

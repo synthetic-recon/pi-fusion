@@ -14,7 +14,7 @@ import {
 	type ToolResultMessage,
 	type ThinkingLevel,
 } from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai/compat";
+import { complete as compatComplete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { TOOL_OUTPUT_MAX_BYTES } from "./config.ts";
 import { modelDisplay } from "./models.ts";
@@ -30,6 +30,7 @@ type CompleteOptions = {
 	maxTokens: number;
 	temperature?: number;
 	reasoning?: ThinkingLevel;
+	sessionId?: string;
 };
 
 export interface ModelReasoningResolution {
@@ -65,11 +66,19 @@ export async function buildCompleteOptions(
 	if (!auth.ok || !auth.apiKey) {
 		throw new Error(auth.ok ? `No API key for ${modelDisplay(model)}` : auth.error);
 	}
+	const headers = auth.headers
+		? Object.fromEntries(Object.entries(auth.headers).filter((e): e is [string, string] => e[1] != null))
+		: undefined;
 	const options: CompleteOptions = {
 		apiKey: auth.apiKey,
-		headers: auth.headers,
+		headers,
 		signal,
 		maxTokens,
+		// Session-scoped providers (e.g. cursor-agent) key conversation state by
+		// sessionId and reuse the FIRST call's system prompt for every later call
+		// in the same session ("default" when unset). A unique id per fusion call
+		// keeps panel and judge system prompts from clobbering each other.
+		sessionId: `pi-fusion-${crypto.randomUUID()}`,
 	};
 	// Some models (e.g. Anthropic Claude Opus 4.7+, OpenAI Codex) reject temperature.
 	if (getSupportsTemperature(model)) {
@@ -91,6 +100,7 @@ export async function callModelText(
 ): Promise<AssistantMessage> {
 	const options = await buildCompleteOptions(registry, model, maxTokens, temperature, signal, reasoning);
 	return runComplete(
+		registry,
 		model,
 		{ systemPrompt, messages: [{ role: "user", content: userText, timestamp: Date.now() }] },
 		options,
@@ -143,7 +153,7 @@ export async function callModelWithTools(
 	let errorStreak = 0;
 
 	while (true) {
-		const resp = await runComplete(model, { systemPrompt, messages, tools }, options);
+		const resp = await runComplete(registry, model, { systemPrompt, messages, tools }, options);
 		turns++;
 
 		const calls = resp.content.filter((c): c is ToolCall => c.type === "toolCall");
@@ -187,19 +197,32 @@ export async function callModelWithTools(
 			// explicitly told to answer now). System-prompt nudge avoids an illegal trailing
 			// user message after tool results.
 			const finalSystem = `${systemPrompt}\n\nYou have reached the tool-call limit. Write your complete final answer now using only what you have already gathered — do not request any more tools.`;
-			const finalMsg = await runComplete(model, { systemPrompt: finalSystem, messages }, options);
+			const finalMsg = await runComplete(registry, model, { systemPrompt: finalSystem, messages }, options);
 			turns++;
 			return { message: finalMsg, turns, toolCalls, cappedOut: true };
 		}
 	}
 }
 
+type RegistryComplete = (
+	model: Model<Api>,
+	context: { systemPrompt: string; messages: Message[]; tools?: Tool[] },
+	options: CompleteOptions,
+) => Promise<AssistantMessage>;
+
 async function runComplete(
+	registry: ModelRegistry,
 	model: Model<Api>,
 	context: { systemPrompt: string; messages: Message[]; tools?: Tool[] },
 	options: CompleteOptions,
 ): Promise<AssistantMessage> {
-	const resp = await complete(model, context, options);
+	// pi >= 0.85 exposes ModelRegistry.complete, which routes through provider
+	// extensions (e.g. cursor-agent) so their models work in panel/judge calls.
+	// Older pi (and the test harness registry) falls back to the direct call.
+	const registryComplete = (registry as ModelRegistry & { complete?: RegistryComplete }).complete;
+	const resp = registryComplete
+		? await registryComplete.call(registry, model, context, options)
+		: await compatComplete(model, context, options);
 	if (resp.stopReason === "error" || resp.stopReason === "aborted") {
 		throw new Error(resp.errorMessage ?? `Model stopped with reason: ${resp.stopReason}`);
 	}
