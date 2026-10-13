@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Panel tool calls now satisfy pi 1.0's `ExtensionToolContext`. Session getters stay intact, and a caller that is not already a tool context (such as `/fusion-report`) gets a closed `executeTool` instead of a missing-property type error.
+
 ## 0.9.2
 
 - Clarified README and the `/fusion on` empty-panel message: forced mode needs a resolvable panel from `fusion.json` / `defaultPanel` / `/fusion-setup`, not auto-select.

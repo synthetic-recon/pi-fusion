@@ -15,7 +15,7 @@ import {
 	type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { complete as compatComplete } from "@earendil-works/pi-ai/compat";
-import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ExtensionToolContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { TOOL_OUTPUT_MAX_BYTES } from "./config.ts";
 import { modelDisplay } from "./models.ts";
 import type { FusionToolDef } from "./tools.ts";
@@ -229,6 +229,36 @@ async function runComplete(
 	return resp;
 }
 
+function isExtensionToolContext(ctx: ExtensionContext): ctx is ExtensionToolContext {
+	const candidate = ctx as Partial<Pick<ExtensionToolContext, "tools" | "executeTool">>;
+	return Array.isArray(candidate.tools) && typeof candidate.executeTool === "function";
+}
+
+/**
+ * pi >= 1.0 types `ToolDefinition.execute`'s context as `ExtensionToolContext`.
+ * Copy property descriptors instead of spreading: session fields are lazy getters,
+ * and a spread would freeze them. Callers that already have a tool context (the
+ * `fusion` tool) keep it. Command callers such as `/fusion-report` do not, so
+ * nested calls fail closed the same way pi does without a tool runner.
+ */
+function panelToolContext(ctx: ExtensionContext): ExtensionToolContext {
+	if (isExtensionToolContext(ctx)) return ctx;
+	const toolCtx = Object.defineProperties({}, Object.getOwnPropertyDescriptors(ctx)) as ExtensionToolContext;
+	const executeTool: ExtensionToolContext["executeTool"] = async (name) => ({
+		toolCall: { type: "toolCall", id: "panel/0", name, arguments: {} },
+		result: {
+			content: [{ type: "text", text: "Nested tool calls are not available to panel tools" }],
+			details: {},
+		},
+		isError: true,
+	});
+	Object.defineProperties(toolCtx, {
+		tools: { value: [], enumerable: true },
+		executeTool: { value: executeTool, enumerable: true },
+	});
+	return toolCtx;
+}
+
 /** Execute one tool call, push its result message, and report success. Never throws. */
 async function executeToolCall(
 	tc: ToolCall,
@@ -242,7 +272,7 @@ async function executeToolCall(
 		// tc.arguments is already a parsed object — pass it straight through.
 		// Cancellation flows through the explicit `signal` arg, which every built-in
 		// tool honors (verified); no ctx.signal override is needed.
-		const out = await def.execute(tc.id, tc.arguments, signal, undefined, ctx);
+		const out = await def.execute(tc.id, tc.arguments, signal, undefined, panelToolContext(ctx));
 		messages.push({
 			role: "toolResult",
 			toolCallId: tc.id,

@@ -221,6 +221,47 @@ test("every turn of one tool loop reuses a single sessionId through registry.com
 	if (sessionIds.at(-1) === loopIds[0]) throw new Error("a later independent call must get a fresh sessionId");
 });
 
+test("panel tool execute receives a tool context, and an existing one is reused", async () => {
+	const registration = registerFauxProvider({
+		api: `fusion-tool-ctx-${Date.now()}`,
+		provider: "fusion-test",
+		models: [{ id: "tool-ctx" }],
+	});
+	const seen: unknown[] = [];
+	const probe = {
+		name: "probe",
+		description: "probe",
+		parameters: { type: "object", properties: {} },
+		async execute(...args: unknown[]) {
+			seen.push(args[4]);
+			return { content: [{ type: "text", text: "ok" }], details: {} };
+		},
+	} as any;
+	const nested = async () => ({ isError: true as const });
+	const registry = { async getApiKeyAndHeaders() { return { ok: true, apiKey: "test" }; } } as any;
+	registration.setResponses([
+		() => fauxAssistantMessage(fauxToolCall("probe", {}), { stopReason: "toolUse" }),
+		() => fauxAssistantMessage("done"),
+		() => fauxAssistantMessage(fauxToolCall("probe", {}), { stopReason: "toolUse" }),
+		() => fauxAssistantMessage("done"),
+	]);
+	try {
+		await callModelWithTools(registry, registration.getModel() as Model<Api>, "system", "task", 256, 0.3, undefined, [probe], 2, { cwd: "/tmp" } as any);
+		await callModelWithTools(registry, registration.getModel() as Model<Api>, "system", "task", 256, 0.3, undefined, [probe], 2, { tools: [{ name: "read" }], executeTool: nested } as any);
+	} finally {
+		registration.unregister();
+	}
+
+	const plain = seen[0] as { cwd?: string; tools?: unknown[]; executeTool?: (name: string, args: unknown) => Promise<{ isError: boolean }> };
+	eq(plain.cwd, "/tmp", "session fields survive the tool-context adapter");
+	eq(plain.tools?.length, 0, "a non-tool caller gets no nested tools");
+	const blocked = await plain.executeTool?.("fusion", {});
+	eq(blocked?.isError, true, "nested calls fail closed when pi did not provide executeTool");
+	const reused = seen[1] as { tools?: Array<{ name: string }>; executeTool?: unknown };
+	eq(reused.tools?.[0]?.name, "read", "an existing tool list is passed through");
+	eq(reused.executeTool, nested, "an existing executeTool is reused");
+});
+
 test("registries without complete() fall back to compat and still pass per-call sessionIds", async () => {
 	const { registration, model, compatCalls } = fauxCompat(["text", "tool", "text"]);
 	const registry = { async getApiKeyAndHeaders() { return { ok: true, apiKey: "test" }; } } as any;
