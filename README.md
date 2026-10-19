@@ -161,7 +161,7 @@ Generate a project-local template with `/fusion-init`, or write one by hand. Nam
 | `panelTools` | `"none"` | Panel tool access: `"none"`, `"readonly"` (read/grep/find/ls), `"all"` (adds bash/edit/write), or an explicit tool-name list (e.g. `["read", "grep"]`). The list form is **config-file only**. |
 | `maxToolCalls` | 16 | Max tool-call steps **per panel model** when tools are on (1–100). Models batch several calls per turn, so this is the per-agent budget; total ≈ panel size × this. |
 | `panelToolsConsent` | `false` | Pre-authorize mutating tools in non-interactive (`-p`) runs. |
-| `footerDisplay` | `"full"` | Fusion status verbosity: `"full"` includes mode, active named panel, panel count, reasoning, judge, and tools; `"compact"` shows mode + panel count; `"off"` clears only Fusion's keyed status. The legacy key name is retained for compatibility. |
+| `footerDisplay` | `"full"` | Fusion status verbosity: `"full"` includes mode, active named panel, panel count, reasoning, judge, and tools **while Fusion is forced on** (`/fusion on`); `available` and `off` collapse to mode + panel count so a configured panel stops crowding the footer in sessions that never run it. `"compact"` always shows mode + panel count; `"off"` clears only Fusion's keyed status. The legacy key name is retained for compatibility. |
 
 **Precedence.** Everything resolves one-shot `--panel` selection → session snapshot (`/fusion-setup`) → `defaultPanel` → legacy top-level `panel`/`judge` → auto-selection. Project-local config replaces global config rather than merging with it. An explicit unknown, malformed, empty, or unusable named panel fails before any provider call; an invalid `defaultPanel` warns and continues through legacy/auto selection. The invoking model can't override any of this (the tool takes only the prompt + optional context controls).
 
@@ -178,7 +178,7 @@ By default panel models answer in a single turn with no tools. Enable tools to l
 
 Set tools and Fusion status display in `/fusion-setup` (Config section) or in `fusion.json` (`panelTools`, `maxToolCalls`, `footerDisplay`). These are user configuration only — the invoking model has no tool parameters to override them.
 
-Fusion contributes status through Pi's keyed status API; it does not own or replace the footer. The built-in footer or any third-party footer extension can render Fusion alongside other extension statuses.
+Fusion contributes status through Pi's keyed status API; it does not own or replace the footer. The built-in footer or any third-party footer extension can render Fusion alongside other extension statuses. The panel/judge/reasoning detail is only shown while Fusion is forced on: `available` renders as `Fusion available • N panel` and `off` renders as `Fusion off`.
 
 > **Note:** enabling panel tools means **file contents (and command output for `all`) are sent to every panel model's provider**. Only enable it where that's acceptable.
 

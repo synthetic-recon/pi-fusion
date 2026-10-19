@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, eq, fakeModel } from "./_harness.ts";
+import { test, eq, fakeModel, withEmptyAgentDir } from "./_harness.ts";
 import registerFusionExtension, {
 	activatePendingPanel,
 	armPendingPanel,
@@ -185,34 +185,50 @@ test("pending panel is session-bound, agent-bound, and consumed once", () => {
 test("fusionFooterText supports full, compact, and off display modes", () => {
 	const panel = new Set(["anthropic/claude-sonnet-4-5", "openai/gpt-4.1"]);
 	eq(
-		fusionFooterText(panel, "anthropic/claude-opus-4-5", "available", "full"),
-		"Fusion available • 2 panel • judge anthropic/claude-opus-4-5",
-		"full footer includes judge",
+		fusionFooterText(panel, "anthropic/claude-opus-4-5", "forced", "full"),
+		"Fusion forced • 2 panel • judge anthropic/claude-opus-4-5",
+		"full footer includes judge while Fusion is forced",
 	);
 	eq(
-		fusionFooterText(panel, "anthropic/claude-opus-4-5", "available", "full", {
+		fusionFooterText(panel, "anthropic/claude-opus-4-5", "forced", "full", {
 			profileName: "quality",
 			panelReasoning: "high",
 			judgeReasoning: "xhigh",
 		}),
-		"Fusion available • named panel quality • 2 panel • panel reasoning high • judge reasoning xhigh • judge anthropic/claude-opus-4-5",
+		"Fusion forced • named panel quality • 2 panel • panel reasoning high • judge reasoning xhigh • judge anthropic/claude-opus-4-5",
 		"full status uses the canonical profile and reasoning order",
 	);
 	eq(
-		fusionFooterText(panel, "anthropic/claude-opus-4-5", "available", "compact"),
-		"Fusion available • 2 panel",
+		fusionFooterText(panel, "anthropic/claude-opus-4-5", "forced", "compact"),
+		"Fusion forced • 2 panel",
 		"compact footer omits judge",
 	);
 	eq(
-		fusionFooterText(panel, "anthropic/claude-opus-4-5", "available", "off"),
+		fusionFooterText(panel, "anthropic/claude-opus-4-5", "forced", "off"),
 		undefined,
 		"off footer hides fusion text",
+	);
+});
+
+test("fusionFooterText keeps the footer terse unless Fusion is forced", () => {
+	const panel = new Set(["anthropic/claude-sonnet-4-5", "openai/gpt-4.1"]);
+	const state = { profileName: "quality", panelReasoning: "high", judgeReasoning: "xhigh" } as const;
+	eq(
+		fusionFooterText(panel, "anthropic/claude-opus-4-5", "available", "full", state),
+		"Fusion available • 2 panel",
+		"available mode does not print panel, reasoning, or judge detail",
+	);
+	eq(
+		fusionFooterText(panel, "anthropic/claude-opus-4-5", "off", "full", state),
+		"Fusion off",
+		"off mode collapses to the mode word even with a configured panel",
 	);
 });
 
 test("fusionFooterText hides footer text when panel is empty", () => {
 	eq(fusionFooterText(new Set(), undefined, "available", "full"), undefined, "available mode with no panel hides text");
 	eq(fusionFooterText(new Set(), undefined, "off", "full"), "Fusion off", "off mode still reports disabled state");
+	eq(fusionFooterText(new Set(), undefined, "forced", "full"), undefined, "forced mode with no panel hides text");
 });
 
 function fakeContext(branch: unknown[] = []): ExtensionContext {
@@ -224,6 +240,7 @@ function fakeContext(branch: unknown[] = []): ExtensionContext {
 }
 
 test("lifecycle refresh publishes and clears only Fusion's keyed status", async () => {
+	await withEmptyAgentDir(async () => {
 	type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
 	const handlers = new Map<string, EventHandler>();
@@ -278,7 +295,7 @@ test("lifecycle refresh publishes and clears only Fusion's keyed status", async 
 		statuses.at(-1),
 		{
 			key: "fusion",
-			text: "Fusion available • 1 panel • panel reasoning high • judge reasoning xhigh • judge anthropic/claude-opus-4-5",
+			text: "Fusion available • 1 panel",
 		},
 		"session refresh publishes Fusion status",
 	);
@@ -290,6 +307,7 @@ test("lifecycle refresh publishes and clears only Fusion's keyed status", async 
 	await refreshTree({}, ctx);
 	eq(statuses.at(-1), { key: "fusion", text: undefined }, "missing state clears stale Fusion status");
 	eq(footerCalls, 0, "clearing status does not replace Pi's footer renderer");
+	});
 });
 
 test("buildInitialState seeds panel tools from config when session has no tool choice", () => {

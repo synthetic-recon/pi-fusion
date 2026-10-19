@@ -4,6 +4,9 @@
  */
 
 import type { Api, Model } from "../types.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export function test(name: string, fn: () => void | Promise<void>) {
 	try {
@@ -24,6 +27,23 @@ export function test(name: string, fn: () => void | Promise<void>) {
 export function eq<T>(a: T, b: T, msg: string) {
 	if (JSON.stringify(a) !== JSON.stringify(b)) {
 		throw new Error(`${msg}: got ${JSON.stringify(a)}, want ${JSON.stringify(b)}`);
+	}
+}
+
+/**
+ * Run a body with an isolated, empty agent config dir so tests never pick up the
+ * developer's real ~/.pi/agent/fusion.json (which would make footer assertions machine-specific).
+ */
+export async function withEmptyAgentDir<T>(fn: () => T | Promise<T>): Promise<T> {
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	const dir = mkdtempSync(join(tmpdir(), "pi-fusion-agent-"));
+	process.env.PI_CODING_AGENT_DIR = dir;
+	try {
+		return await fn();
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(dir, { recursive: true, force: true });
 	}
 }
 

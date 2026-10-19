@@ -138,6 +138,14 @@ function footerStatusLine(display: FooterDisplay): string {
 	return `Fusion status: ${display}`;
 }
 
+/**
+ * Panel/judge/reasoning/tools detail is only worth footer space while every prompt actually runs
+ * through the panel. In the default "available" state (or with Fusion off) it is just noise.
+ */
+function showsFooterDetail(mode: FusionMode, display: FooterDisplay): boolean {
+	return display === "full" && mode === "forced";
+}
+
 export function fusionFooterText(
 	selectedIds: Set<string>,
 	judgeId: string | undefined,
@@ -146,9 +154,10 @@ export function fusionFooterText(
 	state?: Pick<FusionSetupState, "profileName" | "panelReasoning" | "judgeReasoning">,
 ): string | undefined {
 	if (display === "off") return undefined;
-	if (selectedIds.size === 0) return mode === "off" ? "Fusion off" : undefined;
+	if (mode === "off") return "Fusion off";
+	if (selectedIds.size === 0) return undefined;
 	const panel = Array.from(selectedIds);
-	if (display === "compact") return `${modeLabel(mode)} • ${panel.length} panel`;
+	if (!showsFooterDetail(mode, display)) return `${modeLabel(mode)} • ${panel.length} panel`;
 	const judge = judgeId ?? panel[0];
 	const parts = [modeLabel(mode)];
 	if (state?.profileName) parts.push(`named panel ${state.profileName}`);
@@ -183,7 +192,7 @@ function updateStatus(
 	const footerDisplay = effectiveFooterDisplay(ctx);
 	const state = effectivePanel(ctx);
 	const baseText = fusionFooterText(selectedIds, judgeId, mode, footerDisplay, state);
-	const fusionText = baseText && footerDisplay === "full" ? baseText + toolsSuffix(state) : baseText;
+	const fusionText = baseText && showsFooterDetail(mode, footerDisplay) ? baseText + toolsSuffix(state) : baseText;
 	ctx.ui.setStatus("fusion", fusionText);
 }
 
@@ -534,7 +543,7 @@ export default function (pi: ExtensionAPI) {
 				updateStatus(ctx, displayIds, displayJudge, nextMode);
 				const footerDisplay = effectiveFooterDisplay(ctx);
 				const summaryBase = fusionFooterText(displayIds, displayJudge, nextMode, footerDisplay) ?? modeLabel(nextMode);
-				const summary = footerDisplay === "full" ? summaryBase + toolsSuffix(sessionState ?? panel) : summaryBase;
+				const summary = footerDisplay === "full" && nextMode === "forced" ? summaryBase + toolsSuffix(sessionState ?? panel) : summaryBase;
 				if (ctx.mode === "print") console.log(summary);
 				else ctx.ui.notify(summary, "info");
 				return;

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fusion's footer status is now terse unless Fusion actually runs every prompt: the named panel, panel count, reasoning, and judge are listed only in forced mode (`/fusion on`). `available` renders as `Fusion available • N panel` and `off` renders as `Fusion off`, so a configured `defaultPanel` no longer fills the footer in sessions that never use Fusion.
+- Footer lifecycle tests run against an isolated `PI_CODING_AGENT_DIR`, so a developer's own `~/.pi/agent/fusion.json` can no longer change the expected status text.
+
 - Panel tool calls now satisfy pi 1.0's `ExtensionToolContext`. Session getters stay intact, and a caller that is not already a tool context (such as `/fusion-report`) gets a closed `executeTool` instead of a missing-property type error.
 
 ## 0.9.2
