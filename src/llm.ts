@@ -19,6 +19,7 @@ import type { ExtensionContext, ExtensionToolContext, ModelRegistry } from "@ear
 import { TOOL_OUTPUT_MAX_BYTES } from "./config.ts";
 import { modelDisplay } from "./models.ts";
 import type { FusionToolDef } from "./tools.ts";
+import type { PanelUsage, PanelResponseDiagnostics } from "./types.ts";
 import { truncateToBytes } from "./utils.ts";
 
 type ToolContent = ToolResultMessage["content"];
@@ -344,4 +345,27 @@ export function getTextContent(message: AssistantMessage): string {
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
 		.map((c) => c.text)
 		.join("\n");
+}
+
+/**
+ * Numeric-only completion diagnostics from the raw provider message: stop reason and token
+ * counts. Never carries resolved prompts, API keys, reasoning content, or raw payloads, so it
+ * is safe to attach to tool results and session details for successes and empty responses alike.
+ */
+export function getPanelDiagnostics(message: AssistantMessage): PanelResponseDiagnostics {
+	const usage: PanelUsage | undefined = message.usage
+		? {
+			input: message.usage.input,
+			output: message.usage.output,
+			...(typeof message.usage.reasoning === "number" ? { reasoning: message.usage.reasoning } : {}),
+			cache_read: message.usage.cacheRead,
+			cache_write: message.usage.cacheWrite,
+			total: message.usage.totalTokens,
+		}
+		: undefined;
+	return {
+		stop_reason: message.stopReason,
+		truncated: message.stopReason === "length",
+		...(usage ? { usage } : {}),
+	};
 }

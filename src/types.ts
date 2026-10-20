@@ -2,9 +2,9 @@
  * Shared types for pi-fusion.
  */
 
-import type { Api, Model, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { Api, Model, StopReason, ThinkingLevel } from "@earendil-works/pi-ai";
 
-export type { Api, Model, ThinkingLevel };
+export type { Api, Model, StopReason, ThinkingLevel };
 
 /** Named panel tool bundles, or an explicit list of tool names. */
 export type ToolMode = "none" | "readonly" | "all";
@@ -89,6 +89,7 @@ export interface PanelResult {
 	content: string;
 	error?: string;
 	tools?: PanelToolUsage;
+	diagnostics?: PanelResponseDiagnostics;
 }
 
 export interface FusionAnalysis {
@@ -127,6 +128,33 @@ export interface PanelToolUsage {
 	capped: boolean;
 }
 
+/**
+ * Numeric-only token usage projection. Deliberately excludes prompts, API keys, raw
+ * payloads, and reasoning/thinking content — only token counts are retained.
+ */
+export interface PanelUsage {
+	input: number;
+	output: number;
+	/** Reasoning-token count when reported; never reasoning text. */
+	reasoning?: number;
+	cache_read: number;
+	cache_write: number;
+	total: number;
+}
+
+/**
+ * Completion metadata for one panel call, kept for successes AND empty responses so a
+ * blank answer can still be diagnosed. Holds no text or reasoning content.
+ */
+export interface PanelResponseDiagnostics {
+	/** Exact `AssistantMessage.stopReason` reported by the provider (e.g. "stop", "length"). */
+	stop_reason: StopReason;
+	/** True when the provider stopped at the configured output budget (stop_reason === "length"). */
+	truncated: boolean;
+	/** Reported token counts; omitted only when the provider message carried none. */
+	usage?: PanelUsage;
+}
+
 export interface FusionResult {
 	content: Array<{ type: "text"; text: string }>;
 	details: FusionDetails;
@@ -136,8 +164,8 @@ export interface FusionDetails {
 	/** OpenRouter-style status: ok if any useful panel response exists; error only for hard failure. */
 	status: "ok" | "error";
 	analysis?: FusionAnalysis;
-	responses: Array<{ model: string; content: string; tools?: PanelToolUsage }>;
-	failed_models?: Array<{ model: string; error: string; tools?: PanelToolUsage }>;
+	responses: Array<{ model: string; content: string; tools?: PanelToolUsage; diagnostics?: PanelResponseDiagnostics }>;
+	failed_models?: Array<{ model: string; error: string; tools?: PanelToolUsage; diagnostics?: PanelResponseDiagnostics }>;
 	panel_models?: string[];
 	judge_model?: string;
 	/** Effective named panel, when resolution selected one. */

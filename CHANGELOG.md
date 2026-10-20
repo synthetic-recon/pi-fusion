@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The panel system prompt now states the effective `maxPanelOutputTokens` budget and asks for a concise verdict or direct answer first, staying under the cap instead of padding while still honoring exact-format requests. Every panel response (success and empty) now carries numeric-only `stop_reason`/`truncated`/`usage` diagnostics, including reasoning-token counts when the provider reports them; no prompt text, reasoning content, or API payloads are retained. A panelist that stops at `length` keeps its partial text and is flagged INCOMPLETE for the judge, so the judge no longer reads a cut-off answer as a finished position. No retries, model, reasoning, temperature, or judge-cap behavior changed.
 - Panel tool calls now satisfy pi 1.0's `ExtensionToolContext`. Session getters stay intact, and a caller that is not already a tool context (such as `/fusion-report`) gets a closed `executeTool` instead of a missing-property type error.
 
 ## 0.9.2

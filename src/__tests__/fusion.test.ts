@@ -3,11 +3,13 @@
  */
 
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compactFusionToolText, emptyPanelError, parseFusionAnalysis, resolveFusionSelection, resolvePanelReasoning, runFusion } from "../fusion.ts";
+import { buildPanelSystemPrompt } from "../prompts.ts";
 import type { Api, Model, ThinkingLevel } from "../types.ts";
 import { eq, fakeModel, test } from "./_harness.ts";
 
@@ -84,11 +86,51 @@ function registryFor(models: Model<Api>[], authed: Set<string> = new Set(models.
 	} as any;
 }
 
-function trustedProjectConfig(): string {
+function trustedProjectConfig(config: object = {}): string {
 	const cwd = mkdtempSync(join(tmpdir(), "pi-fusion-test-"));
 	mkdirSync(join(cwd, ".pi"));
-	writeFileSync(join(cwd, ".pi", "fusion.json"), "{}");
+	writeFileSync(join(cwd, ".pi", "fusion.json"), JSON.stringify(config));
 	return cwd;
+}
+
+function fauxUsage(overrides: Partial<Usage> = {}): Usage {
+	return {
+		input: 100,
+		output: 20,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 120,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		...overrides,
+	};
+}
+
+/** Build an assistant reply with an explicit stop reason and usage for diagnostics tests. */
+function fauxReply(text: string, stopReason: AssistantMessage["stopReason"], usage: Usage = fauxUsage()): AssistantMessage {
+	return { ...fauxAssistantMessage(text, { stopReason }), usage };
+}
+
+/** Registry that dispatches through ModelRegistry.complete so replies control stopReason/usage. */
+function diagnosticsRegistry(models: Model<Api>[], replies: Map<string, () => AssistantMessage>) {
+	const calls: Array<{ model: string; systemPrompt: string; userText: string }> = [];
+	const registry = {
+		...registryFor(models),
+		async getApiKeyAndHeaders() {
+			return { ok: true, apiKey: "test" };
+		},
+		async complete(model: Model<Api>, context: { systemPrompt: string; messages: Array<{ content?: unknown }> }) {
+			const name = `${model.provider}/${model.id}`;
+			calls.push({
+				model: name,
+				systemPrompt: context.systemPrompt,
+				userText: String(context.messages[0]?.content ?? ""),
+			});
+			const reply = replies.get(name);
+			if (!reply) throw new Error(`no scripted reply for ${name}`);
+			return reply();
+		},
+	} as any;
+	return { registry, calls };
 }
 
 test("selection preview exposes named panel metadata from the shared boundary", async () => {
@@ -496,6 +538,170 @@ test("judge retry keeps configured reasoning and carries the strict JSON instruc
 		eq(result.details.failure_reason, undefined, "successful retry is not a failure");
 	} finally {
 		registration.unregister();
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("panel system prompt states the configured budget and asks for a concise lead", () => {
+	const prompt = buildPanelSystemPrompt(8192, false);
+	if (!prompt.includes("8192")) throw new Error("prompt must state the configured budget");
+	if (prompt.includes("2048")) throw new Error("prompt must not hardcode the default budget");
+	if (!prompt.includes("reasoning tokens may share this cap")) throw new Error("prompt must reserve budget for visible answer text");
+	if (!/verdict or direct answer/i.test(prompt)) throw new Error("prompt must ask for a verdict/direct answer first");
+	if (!/comfortably below the cap/i.test(prompt)) throw new Error("prompt must ask to stay well under the cap");
+	if (!prompt.includes('"OK"')) throw new Error("prompt must honor exact short-format requests");
+	if (!/do not claim to have counted tokens precisely/i.test(prompt)) throw new Error("prompt must not promise precise token counting");
+
+	const toolsPrompt = buildPanelSystemPrompt(1024, true);
+	if (!toolsPrompt.includes("1024")) throw new Error("tool variant must also state the budget");
+	if (!toolsPrompt.includes("access to tools")) throw new Error("tool variant must retain its tool instructions");
+});
+
+test("panel prompt reflects the configured budget and successful responses carry numeric diagnostics", async () => {
+	const provider = `fusion-budget-${Math.random().toString(36).slice(2)}`;
+	const panelA = fakeModel(provider, "panel-a");
+	const panelB = fakeModel(provider, "panel-b");
+	const judge = fakeModel(provider, "judge");
+	const judgeJson = JSON.stringify({
+		consensus: ["both agree"],
+		contradictions: [],
+		partial_coverage: [],
+		unique_insights: [],
+		blind_spots: [],
+	});
+	const panelAUsage = fauxUsage({ input: 111, output: 22, cacheRead: 3, cacheWrite: 4, totalTokens: 140 });
+	const replies = new Map<string, () => AssistantMessage>([
+		[`${provider}/panel-a`, () => fauxReply("panel a concise verdict", "stop", panelAUsage)],
+		[`${provider}/panel-b`, () => fauxReply("panel b concise verdict", "stop")],
+		[`${provider}/judge`, () => fauxReply(judgeJson, "stop")],
+	]);
+	const { registry, calls } = diagnosticsRegistry([panelA, panelB, judge], replies);
+	const cwd = trustedProjectConfig({ maxPanelOutputTokens: 8192 });
+
+	try {
+		const result = await runFusion(
+			cwd,
+			registry,
+			undefined,
+			"compare",
+			true,
+			{ analysis_models: [`${provider}/panel-a`, `${provider}/panel-b`], model: `${provider}/judge` },
+			{} as any,
+			false,
+			undefined,
+		);
+
+		const panelCalls = calls.filter((c) => c.model !== `${provider}/judge`);
+		eq(panelCalls.length, 2, "each panelist is called exactly once (no added retry)");
+		eq(calls.length, 3, "one judge call and no extra model calls");
+		for (const call of panelCalls) {
+			if (!call.systemPrompt.includes("8192")) throw new Error(`panel prompt missing configured budget: ${call.systemPrompt}`);
+			if (!/verdict or direct answer/i.test(call.systemPrompt)) throw new Error("panel prompt must lead with a verdict/direct answer");
+		}
+		const judgeCall = calls.find((c) => c.model === `${provider}/judge`);
+		if (judgeCall?.userText.includes("INCOMPLETE")) throw new Error("complete responses must not be flagged incomplete");
+
+		eq(result.details.responses[0]?.content, "panel a concise verdict", "successful text is retained");
+		eq(result.details.responses[0]?.diagnostics, {
+			stop_reason: "stop",
+			truncated: false,
+			usage: { input: 111, output: 22, cache_read: 3, cache_write: 4, total: 140 },
+		}, "successful response exposes numeric diagnostics");
+		const toolText = result.content[0]?.text ?? "";
+		if (!toolText.includes('"diagnostics"')) throw new Error("tool result should surface diagnostics");
+		if (!toolText.includes('"truncated": false')) throw new Error("tool result should surface the truncated flag");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("length-capped partial text is retained and flagged to the judge without extra calls", async () => {
+	const provider = `fusion-truncated-${Math.random().toString(36).slice(2)}`;
+	const panelA = fakeModel(provider, "panel-a");
+	const panelB = fakeModel(provider, "panel-b");
+	const judge = fakeModel(provider, "judge");
+	const partialA = "Panel A begins an answer but runs out of budget mid-";
+	const partialB = "Panel B also runs out before finishing its";
+	const judgeJson = JSON.stringify({
+		consensus: ["agree on the visible part"],
+		contradictions: [],
+		partial_coverage: [],
+		unique_insights: [],
+		blind_spots: [],
+	});
+	const replies = new Map<string, () => AssistantMessage>([
+		[`${provider}/panel-a`, () => fauxReply(partialA, "length")],
+		[`${provider}/panel-b`, () => fauxReply(partialB, "length")],
+		[`${provider}/judge`, () => fauxReply(judgeJson, "stop")],
+	]);
+	const { registry, calls } = diagnosticsRegistry([panelA, panelB, judge], replies);
+	const cwd = trustedProjectConfig();
+
+	try {
+		const result = await runFusion(
+			cwd,
+			registry,
+			undefined,
+			"compare",
+			true,
+			{ analysis_models: [`${provider}/panel-a`, `${provider}/panel-b`], model: `${provider}/judge` },
+			{} as any,
+			false,
+			undefined,
+		);
+
+		eq(calls.length, 3, "no retry or extra model call for truncated responses");
+		eq(result.details.responses.map((r) => r.content), [partialA, partialB], "partial text is preserved verbatim");
+		eq(result.details.responses.map((r) => r.diagnostics?.truncated), [true, true], "both truncations are flagged");
+		eq(result.details.responses.map((r) => r.diagnostics?.stop_reason), ["length", "length"], "stop reason is preserved");
+
+		const judgeCall = calls.find((c) => c.model === `${provider}/judge`);
+		if (!judgeCall?.userText.includes("INCOMPLETE")) throw new Error("judge input must mark truncated responses as incomplete");
+		if (!judgeCall.userText.includes(partialA) || !judgeCall.userText.includes(partialB)) {
+			throw new Error("judge input must keep the partial text");
+		}
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("a length stop with empty text still exposes stop reason and usage as a failure", async () => {
+	const provider = `fusion-empty-length-${Math.random().toString(36).slice(2)}`;
+	const panelA = fakeModel(provider, "panel-a");
+	const panelB = fakeModel(provider, "panel-b");
+	const judge = fakeModel(provider, "judge");
+	const emptyUsage = fauxUsage({ input: 500, output: 2048, totalTokens: 2548 });
+	const replies = new Map<string, () => AssistantMessage>([
+		[`${provider}/panel-a`, () => fauxReply("", "length", emptyUsage)],
+		[`${provider}/panel-b`, () => fauxReply("panel b real answer", "stop")],
+	]);
+	const { registry, calls } = diagnosticsRegistry([panelA, panelB, judge], replies);
+	const cwd = trustedProjectConfig();
+
+	try {
+		const result = await runFusion(
+			cwd,
+			registry,
+			undefined,
+			"compare",
+			true,
+			{ analysis_models: [`${provider}/panel-a`, `${provider}/panel-b`], model: `${provider}/judge` },
+			{} as any,
+			false,
+			undefined,
+		);
+
+		eq(calls.length, 2, "single success skips the judge with no extra call");
+		eq(result.details.status, "ok", "one usable answer keeps the run ok");
+		eq(result.details.responses.map((r) => r.content), ["panel b real answer"], "only the usable answer reaches responses");
+		eq(result.details.failed_models?.length, 1, "the empty length response is a failure");
+		eq(result.details.failed_models?.[0]?.error, "empty response", "empty failure reason is retained");
+		eq(result.details.failed_models?.[0]?.diagnostics, {
+			stop_reason: "length",
+			truncated: true,
+			usage: { input: 500, output: 2048, cache_read: 0, cache_write: 0, total: 2548 },
+		}, "empty failure still exposes stop reason and numeric usage");
+	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });

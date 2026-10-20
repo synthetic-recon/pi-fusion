@@ -14,6 +14,7 @@ import { buildFusionTaskText } from "./context.ts";
 import {
 	callModelText,
 	callModelWithTools,
+	getPanelDiagnostics,
 	getTextContent,
 	resolveModelReasoning,
 } from "./llm.ts";
@@ -24,7 +25,7 @@ import {
 	resolvePanelAndJudge,
 	type ResolveResult,
 } from "./models.ts";
-import { JUDGE_SYSTEM_PROMPT, PANEL_SYSTEM_PROMPT, PANEL_SYSTEM_PROMPT_WITH_TOOLS, truncateForJudge } from "./prompts.ts";
+import { buildPanelSystemPrompt, JUDGE_SYSTEM_PROMPT, truncateForJudge } from "./prompts.ts";
 import {
 	clampMaxToolCalls,
 	isMutatingSelection,
@@ -41,6 +42,7 @@ import type {
 	FusionOptions,
 	FusionResult,
 	PanelResult,
+	PanelResponseDiagnostics,
 	PanelToolUsage,
 	ThinkingLevel,
 	ToolSelection,
@@ -87,6 +89,7 @@ export function compactFusionToolText(details: FusionDetails): string {
 				model: r.model,
 				excerpt: passThroughSingle ? r.content : truncateToBytes(r.content, TOOL_RESULT_EXCERPT_BYTES, "…"),
 				...(r.tools ? { tools: r.tools } : {}),
+				...(r.diagnostics ? { diagnostics: r.diagnostics } : {}),
 			})),
 			...(details.failed_models ? { failed_models: details.failed_models } : {}),
 			panel_models: details.panel_models,
@@ -328,17 +331,19 @@ export async function runFusion(
 	});
 
 	// Run panel (serialized when mutating tools are active).
+	const panelSystemPrompt = buildPanelSystemPrompt(maxPanelOutputTokens, toolsEnabled);
 	const rawPanelResults = await mapWithConcurrencyLimit(panel, panelConcurrency, async (model): Promise<PanelResult> => {
 		const base = { model: modelDisplay(model), provider: model.provider, id: model.id };
 		const effectiveReasoning = panelReasoning.effective[base.model] ?? undefined;
 		try {
 			let content: string;
 			let tools: PanelToolUsage | undefined;
+			let diagnostics: PanelResponseDiagnostics;
 			if (toolsEnabled) {
 				const result = await callModelWithTools(
 					registry,
 					model,
-					PANEL_SYSTEM_PROMPT_WITH_TOOLS,
+					panelSystemPrompt,
 					taskText,
 					maxPanelOutputTokens,
 					temperature,
@@ -350,14 +355,17 @@ export async function runFusion(
 					effectiveReasoning,
 				);
 				content = getTextContent(result.message);
+				diagnostics = getPanelDiagnostics(result.message);
 				tools = { turns: result.turns, tool_calls: result.toolCalls, capped: result.cappedOut };
 			} else {
-				const response = await callModelText(registry, model, PANEL_SYSTEM_PROMPT, taskText, maxPanelOutputTokens, temperature, signal, effectiveReasoning);
+				const response = await callModelText(registry, model, panelSystemPrompt, taskText, maxPanelOutputTokens, temperature, signal, effectiveReasoning);
 				content = getTextContent(response);
+				diagnostics = getPanelDiagnostics(response);
 			}
 			// Empty output is a failure, not a blank "success" — keep it out of the judge.
+			// Partial text from a length-capped response is kept verbatim and flagged separately.
 			const error = emptyPanelError(content, tools?.capped ?? false);
-			return { ...base, content: error ? "" : content, ...(error ? { error } : {}), ...(tools ? { tools } : {}) };
+			return { ...base, content: error ? "" : content, diagnostics, ...(error ? { error } : {}), ...(tools ? { tools } : {}) };
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			return { ...base, content: "", error: message };
@@ -371,7 +379,7 @@ export async function runFusion(
 		const details: FusionDetails = {
 			status: "error",
 			responses: [],
-			failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error", ...(f.tools ? { tools: f.tools } : {}) })),
+			failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error", ...(f.tools ? { tools: f.tools } : {}), ...(f.diagnostics ? { diagnostics: f.diagnostics } : {}) })),
 			panel_models: panelModelNames,
 			judge_model: judgeName,
 			...(profileName ? { panel_profile: profileName } : {}),
@@ -416,10 +424,15 @@ export async function runFusion(
 		const judgeUserText =
 			`Task:\n${taskText}\n\n` +
 			successful
-				.map(
-					(r) =>
-						`--- Response from ${r.model} ---\n${truncateForJudge(r.content, judgeBudgetPerResponse)}`,
-				)
+				.map((r) => {
+					// A length-capped panelist is cut off mid-answer; tell the judge so it does not
+					// read the partial text as a complete position. Other truncation (judge context
+					// window) is still marked by truncateForJudge below.
+					const incomplete = r.diagnostics?.truncated
+						? "[panelist stopped at its output-token limit: this response is INCOMPLETE and may be cut off mid-thought — do not treat it as a finished answer]\n"
+						: "";
+					return `--- Response from ${r.model} ---\n${incomplete}${truncateForJudge(r.content, judgeBudgetPerResponse)}`;
+				})
 				.join("\n\n");
 
 		try {
@@ -446,9 +459,9 @@ export async function runFusion(
 	const details: FusionDetails = {
 		status: "ok",
 		analysis,
-		responses: successful.map((r) => ({ model: r.model, content: r.content, ...(r.tools ? { tools: r.tools } : {}) })),
+		responses: successful.map((r) => ({ model: r.model, content: r.content, ...(r.tools ? { tools: r.tools } : {}), ...(r.diagnostics ? { diagnostics: r.diagnostics } : {}) })),
 		...(failed.length > 0
-			? { failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error", ...(f.tools ? { tools: f.tools } : {}) })) }
+			? { failed_models: failed.map((f) => ({ model: f.model, error: f.error ?? "unknown error", ...(f.tools ? { tools: f.tools } : {}), ...(f.diagnostics ? { diagnostics: f.diagnostics } : {}) })) }
 			: {}),
 		panel_models: panelModelNames,
 		judge_model: judgeName,

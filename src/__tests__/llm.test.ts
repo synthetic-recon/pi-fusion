@@ -2,9 +2,9 @@
  * Tests for provider/model request compatibility.
  */
 
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxThinking, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
-import { buildCompleteOptions, callModelText, callModelWithTools, getSupportsTemperature, resolveModelReasoning } from "../llm.ts";
+import { buildCompleteOptions, callModelText, callModelWithTools, getPanelDiagnostics, getSupportsTemperature, resolveModelReasoning } from "../llm.ts";
 import type { Api, Model, ThinkingLevel } from "../types.ts";
 import { eq, fakeModel, test } from "./_harness.ts";
 
@@ -277,4 +277,27 @@ test("registries without complete() fall back to compat and still pass per-call 
 	if (!compatCalls.every((id) => id?.startsWith("pi-fusion-"))) throw new Error(`unexpected session ids: ${compatCalls}`);
 	if (compatCalls[0] === compatCalls[1]) throw new Error("independent calls must not share a sessionId");
 	eq(compatCalls[1], compatCalls[2], "tool-loop turns share one sessionId on the fallback path too");
+});
+
+test("getPanelDiagnostics keeps only stop reason and numeric usage", () => {
+	const message = {
+		...fauxAssistantMessage([fauxThinking("SECRET chain-of-thought"), fauxText("visible answer")], { stopReason: "length" }),
+		usage: {
+			input: 321,
+			output: 2048,
+			reasoning: 1234,
+			cacheRead: 10,
+			cacheWrite: 20,
+			totalTokens: 2399,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	};
+	const diagnostics = getPanelDiagnostics(message);
+	eq(diagnostics, {
+		stop_reason: "length",
+		truncated: true,
+		usage: { input: 321, output: 2048, reasoning: 1234, cache_read: 10, cache_write: 20, total: 2399 },
+	}, "diagnostics project numeric usage and the stop reason");
+	eq(getPanelDiagnostics({ ...message, usage: { ...message.usage, reasoning: 0 } }).usage?.reasoning, 0, "zero reasoning usage is retained");
+	if (JSON.stringify(diagnostics).includes("SECRET")) throw new Error("diagnostics must not retain reasoning content");
 });
