@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The `/fusion-init` fallback template now suggests `anthropic/claude-sonnet-5-5` instead of `anthropic/claude-sonnet-4-5`, which Anthropic retires on 2026-11-30. Pi's model metadata marks Sonnet 5.5 as not accepting `temperature`, so fusion already omits it for that model.
 - Panel tool calls now satisfy pi 1.0's `ExtensionToolContext`. Session getters stay intact, and a caller that is not already a tool context (such as `/fusion-report`) gets a closed `executeTool` instead of a missing-property type error.
 
 ## 0.9.2
