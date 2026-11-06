@@ -20,7 +20,7 @@ export interface NamedPanelConfig {
 }
 
 export interface FusionConfig {
-	/** Explicit panel model identifiers, e.g. ["anthropic/claude-sonnet-4-5"]. */
+	/** Explicit panel model identifiers, e.g. ["anthropic/claude-sonnet-5-5"]. */
 	panel?: string[];
 	/** Explicit judge model identifier. */
 	judge?: string;
