@@ -240,7 +240,7 @@ export function generateConfigExample(panel?: string[], judge?: string): FusionC
 		panels: {
 			default: {
 				models: panel ?? [
-					"anthropic/claude-sonnet-4-5",
+					"anthropic/claude-sonnet-5-5",
 					"openai/gpt-4.1",
 					"google/gemini-2.5-pro",
 				],
